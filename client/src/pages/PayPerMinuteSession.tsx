@@ -29,9 +29,10 @@ import {
 import { SessionControls } from '@/components/session/SessionControls';
 import { SessionTimer } from '@/components/session/SessionTimer';
 import { ClientBalance } from '@/components/session/ClientBalance';
+import { VideoCallInterface } from '@/components/session/VideoCallInterface';
 
 export function PayPerMinuteSession() {
-  const [_, params] = useParams();
+  const [_, params] = useParams<{ readerId: string }>();
   const readerId = params?.readerId;
   const [location, setLocation] = useLocation();
   const [activeSession, setActiveSession] = useState<any>(null);
@@ -225,16 +226,27 @@ export function PayPerMinuteSession() {
         <TabsContent value="session" className="mt-0">
           {activeSession ? (
             <div className="grid md:grid-cols-2 gap-6">
-              <SessionTimer 
-                sessionId={activeSession.session._id}
-                initialSessionData={{
-                  minuteRate: activeSession.session.minuteRate,
-                  initialDuration: activeSession.session.initialDuration,
-                  remainingMinutes: activeSession.session.remainingMinutes,
-                  billedMinutes: activeSession.session.billedMinutes
-                }}
-                onSessionEnd={handleSessionEnd}
-              />
+              <div className="flex flex-col gap-6">
+                {activeSession.session.type !== 'chat' && (
+                  <VideoCallInterface
+                    sessionId={activeSession.session._id}
+                    roomId={activeSession.roomId}
+                    sessionType={activeSession.session.type}
+                    onEndCall={handleSessionEnd}
+                  />
+                )}
+                
+                <SessionTimer 
+                  sessionId={activeSession.session._id}
+                  initialSessionData={{
+                    minuteRate: activeSession.session.minuteRate,
+                    initialDuration: activeSession.session.initialDuration,
+                    remainingMinutes: activeSession.session.remainingMinutes,
+                    billedMinutes: activeSession.session.billedMinutes || 0
+                  }}
+                  onSessionEnd={handleSessionEnd}
+                />
+              </div>
               
               <ClientBalance />
             </div>

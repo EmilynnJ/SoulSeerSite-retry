@@ -37,12 +37,14 @@ import {
 import { ClientBalance } from './ClientBalance';
 
 interface Reader {
-  id: number;
+  _id: string;     // MongoDB ObjectID
+  id?: number;     // Legacy ID (optional)
   username: string;
   fullName: string;
   profileImage: string | null;
   bio: string | null;
   ratePerMinute?: number;
+  isOnline?: boolean;
 }
 
 interface SessionControlsProps {
@@ -79,7 +81,7 @@ export const SessionControls: React.FC<SessionControlsProps> = ({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
-          readerId: reader.id,
+          readerId: reader._id,
           type: sessionType,
           initialDuration
         })
