@@ -6,7 +6,7 @@ import { MongoMemoryServer } from 'mongodb-memory-server';
 mongoose.set('strictQuery', false); // For deprecation warning
 
 // MongoDB connection string with fallback
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://emilynn:IsWhjH4vC6khOfrX@soulseerreplit.4czlq8o.mongodb.net/?retryWrites=true&w=majority&appName=SoulSeerReplit';
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://emilynnjj:dblVE7I0xlx8fWSI@cluster0.q84zjg1.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';
 
 // In-memory MongoDB server for development
 let mongoMemoryServer: MongoMemoryServer | null = null;
