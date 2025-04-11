@@ -4,6 +4,7 @@ import mongoose from 'mongoose';
 import { log } from '../server-only';
 import Stripe from 'stripe';
 import { getStripeClient } from '../services/stripe-client';
+import { MongoUser, MongoSession, MongoReading, MongoPayment, MongoClientBalance } from '../types/mongoose';
 
 // Set up Stripe client
 const stripe = getStripeClient();
@@ -16,6 +17,11 @@ const router = Router();
 const authenticate = (req: Request, res: Response, next: Function) => {
   if (!req.user) {
     return res.status(401).json({ error: 'Authentication required' });
+  }
+  // Ensure the user object has the necessary MongoDB _id property
+  if (!req.user._id && req.user.id) {
+    // If there's only a numerical id but no _id, create a proper ObjectId
+    req.user._id = new mongoose.Types.ObjectId(req.user.id.toString());
   }
   next();
 };
