@@ -644,7 +644,8 @@ router.get('/:id', authenticate, async (req: Request, res: Response) => {
 });
 
 /**
- * Add funds to client balance
+ * Add funds to client balance (DEVELOPMENT VERSION)
+ * This simplified version skips Stripe integration for testing purposes
  * POST /api/sessions/add-funds
  */
 router.post('/add-funds', authenticate, async (req: Request, res: Response) => {
@@ -658,9 +659,6 @@ router.post('/add-funds', authenticate, async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Amount must be at least $1.00' });
     }
     
-    // DEVELOPMENT MODE: Skip payment processing for testing
-    // In production, this would use Stripe payment processing
-    
     // Find user in MongoDB
     let user = await User.findById(userId);
     if (!user) {
@@ -669,53 +667,50 @@ router.post('/add-funds', authenticate, async (req: Request, res: Response) => {
     
     log(`Found user for adding funds: ${user.username}`, 'debug');
     
-    // If payment is successful, add funds to client balance
-    if (paymentIntent.status === 'succeeded') {
-      // Check if client balance exists
-      let clientBalance = await ClientBalance.findOne({ clientId: userId });
-      
-      if (!clientBalance) {
-        // Create new client balance
-        clientBalance = await ClientBalance.create({
-          clientId: userId,
-          balance: amount,
-          lockedAmount: 0,
-          lastTopupAmount: amount,
-          lastTopupDate: new Date()
-        });
-      } else {
-        // Update existing client balance
-        clientBalance.balance += amount;
-        clientBalance.lastTopupAmount = amount;
-        clientBalance.lastTopupDate = new Date();
-        await clientBalance.save();
-      }
-      
-      // Create payment record
-      await Payment.create({
-        userId,
-        amount,
-        status: 'completed',
-        type: 'add_funds',
-        stripePaymentId: paymentIntent.id,
-        metadata: {
-          paymentIntentId: paymentIntent.id,
-          paymentMethodId
-        }
-      });
-      
-      return res.status(200).json({ 
-        success: true, 
-        balance: clientBalance.balance,
-        amount,
-        message: 'Funds added successfully'
+    // Check if client balance exists
+    let clientBalance = await ClientBalance.findOne({ clientId: userId });
+    
+    if (!clientBalance) {
+      // Create new client balance
+      log(`Creating new client balance for user ${user.username} with amount ${amount}`, 'debug');
+      clientBalance = await ClientBalance.create({
+        clientId: userId,
+        balance: amount,
+        lockedAmount: 0,
+        lastTopupAmount: amount,
+        lastTopupDate: new Date()
       });
     } else {
-      return res.status(400).json({ 
-        error: 'Payment failed', 
-        paymentIntentStatus: paymentIntent.status
-      });
+      // Update existing client balance
+      log(`Updating client balance for user ${user.username}. Current balance: ${clientBalance.balance}, adding: ${amount}`, 'debug');
+      clientBalance.balance += amount;
+      clientBalance.lastTopupAmount = amount;
+      clientBalance.lastTopupDate = new Date();
+      await clientBalance.save();
     }
+    
+    // Create payment record
+    await Payment.create({
+      userId,
+      readerId: null, // No reader involved in adding funds
+      amount,
+      status: 'completed',
+      type: 'add_funds',
+      readerShare: 0, // No reader share for adding funds
+      platformFee: 0, // No platform fee for adding funds
+      metadata: {
+        method: 'test_payment'
+      }
+    });
+    
+    log(`Successfully added ${amount} to balance for user ${user.username}. New balance: ${clientBalance.balance}`, 'debug');
+    
+    return res.status(200).json({ 
+      success: true, 
+      balance: clientBalance.balance,
+      amount,
+      message: 'Funds added successfully'
+    });
     
   } catch (error: any) {
     log(`Error adding funds: ${error.message}`, 'error');
