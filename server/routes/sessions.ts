@@ -5,6 +5,7 @@ import { log } from '../server-only';
 import Stripe from 'stripe';
 import { getStripeClient } from '../services/stripe-client';
 import { MongoUser, MongoSession, MongoReading, MongoPayment, MongoClientBalance } from '../types/mongoose';
+import crypto from 'crypto';
 
 // Set up Stripe client
 const stripe = getStripeClient();
@@ -755,6 +756,92 @@ router.get('/balance', authenticate, async (req: Request, res: Response) => {
   } catch (error: any) {
     log(`Error getting client balance: ${error.message}`, 'error');
     return res.status(500).json({ error: 'Failed to get client balance', details: error.message });
+  }
+});
+
+/**
+ * Generate Zego token for video/audio call
+ * POST /api/sessions/token
+ */
+router.post('/token', authenticate, async (req: Request, res: Response) => {
+  try {
+    const { sessionId, roomId } = req.body;
+    
+    if (!sessionId || !roomId) {
+      return res.status(400).json({ error: 'Session ID and Room ID are required' });
+    }
+    
+    // Get environment variables
+    const appID = parseInt(process.env.ZEGO_VIDEO_APP_ID || '0');
+    const serverSecret = process.env.ZEGO_VIDEO_SERVER_SECRET || '';
+    
+    if (appID === 0 || !serverSecret) {
+      log('Missing ZEGO_VIDEO_APP_ID or ZEGO_VIDEO_SERVER_SECRET environment variables', 'error');
+      return res.status(500).json({ error: 'ZegoCloud configuration is missing' });
+    }
+    
+    // Find the session
+    const session = await Session.findById(sessionId);
+    if (!session) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+    
+    // Verify user is part of this session
+    const userId = req.user!._id;
+    if (!userId.equals(session.clientId) && !userId.equals(session.readerId)) {
+      return res.status(403).json({ error: 'You are not authorized to access this session' });
+    }
+    
+    // Get user details
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    const userIdStr = userId.toString();
+    const userName = user.fullName || user.username || 'User';
+    
+    // Create a token that expires in 1 hour
+    const effectiveTimeInSeconds = 3600;
+    const timestamp = Math.floor(Date.now() / 1000);
+    const nonce = Math.floor(Math.random() * 2147483647);
+    
+    // Payload format required by ZegoCloud
+    const payload = {
+      ver: 1,
+      timestamp,
+      nonce,
+      app_id: appID,
+      user_id: userIdStr,
+      user_name: userName,
+      room_id: roomId,
+      privilege: {
+        1: 1, // Login room permission
+        2: 1  // Publish stream permission
+      },
+      stream_id_list: null,
+    };
+    
+    // Generate the token with HMAC-SHA256
+    const payloadString = JSON.stringify(payload);
+    const hmac = crypto.createHmac('sha256', serverSecret);
+    hmac.update(payloadString);
+    const token = hmac.digest('base64');
+    
+    log(`Generated Zego token for user ${userIdStr} in room ${roomId}`, 'debug');
+    
+    return res.status(200).json({
+      success: true,
+      token,
+      appID,
+      userId: userIdStr,
+      username: userName,
+      roomId
+    });
+    
+  } catch (error: any) {
+    log(`Error generating Zego token: ${error.message}`, 'error');
+    return res.status(500).json({ error: 'Failed to generate token', details: error.message });
   }
 });
 
