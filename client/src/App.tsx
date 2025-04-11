@@ -24,6 +24,7 @@ import ReaderProfilePage from "@/pages/reader-profile-page";
 import PoliciesPage from "@/pages/policies-page";
 import LivestreamPage from "@/pages/livestream-page";
 import LivestreamDetailPage from "@/pages/livestream-detail-page";
+import PayPerMinuteSession from "@/pages/PayPerMinuteSession";
 import { ProtectedRoute } from "./lib/protected-route";
 import { Layout } from "./components/layout";
 import { PwaInstallBanner } from "@/components/pwa-install-banner";
@@ -71,6 +72,7 @@ function Router() {
         <ProtectedRoute path="/dashboard" component={DashboardPage} />
         <ProtectedRoute path="/messages" component={Messages} />
         <ProtectedRoute path="/reading-session/:id" component={ReadingSessionPage} />
+        <ProtectedRoute path="/pay-per-minute/:readerId" component={PayPerMinuteSession} />
         <ProtectedRoute path="/add-funds" component={AddFundsPage} />
         
         {/* Public routes */}
