@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, useLocation, useNavigate } from 'wouter';
+import { useParams, useLocation } from 'wouter';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { useToast } from '@/hooks/use-toast';
 import { 
@@ -33,7 +33,7 @@ import { ClientBalance } from '@/components/session/ClientBalance';
 export function PayPerMinuteSession() {
   const [_, params] = useParams();
   const readerId = params?.readerId;
-  const [location, navigate] = useLocation();
+  const [location, setLocation] = useLocation();
   const [activeSession, setActiveSession] = useState<any>(null);
   const [activeTab, setActiveTab] = useState<string>('controls');
   const { toast } = useToast();
@@ -158,7 +158,7 @@ export function PayPerMinuteSession() {
           </AlertDescription>
         </Alert>
         
-        <Button onClick={() => navigate('/readers')} className="mt-4">
+        <Button onClick={() => setLocation('/readers')} className="mt-4">
           <ArrowLeft className="h-4 w-4 mr-2" /> Back to Readers
         </Button>
       </div>
@@ -170,7 +170,7 @@ export function PayPerMinuteSession() {
       {/* Back button */}
       <Button 
         variant="ghost" 
-        onClick={() => navigate(`/readers/${readerId}`)} 
+        onClick={() => setLocation(`/readers/${readerId}`)} 
         className="mb-6"
       >
         <ArrowLeft className="h-4 w-4 mr-2" /> 

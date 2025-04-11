@@ -97,7 +97,7 @@ export const SessionTimer: React.FC<SessionTimerProps> = ({
           toast({
             title: 'Session time running out',
             description: 'Please extend your session to continue.',
-            variant: 'warning'
+            variant: 'destructive'
           });
           setShowExtendOptions(true);
         }
