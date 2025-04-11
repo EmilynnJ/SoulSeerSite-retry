@@ -429,6 +429,46 @@ export const Product = mongoose.models.Product || mongoose.model('Product', prod
 export const Livestream = mongoose.models.Livestream || mongoose.model('Livestream', livestreamSchema);
 export const Order = mongoose.models.Order || mongoose.model('Order', orderSchema);
 
+// Session schema for pay-per-minute system
+const sessionSchema = new mongoose.Schema({
+  readingId: { type: mongoose.Schema.Types.ObjectId, ref: 'Reading', required: true },
+  clientId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  readerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  type: { type: String, enum: ['video', 'audio', 'chat'], required: true },
+  status: { type: String, enum: ['initialized', 'active', 'paused', 'completed', 'cancelled'], default: 'initialized' },
+  startTime: { type: Date, default: Date.now },
+  endTime: { type: Date },
+  endedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  endReason: { type: String },
+  minuteRate: { type: Number, required: true }, // Rate per minute in cents
+  initialDuration: { type: Number, default: 5 }, // Initial authorized duration in minutes
+  billedMinutes: { type: Number, default: 0 }, // Number of minutes billed so far
+  remainingMinutes: { type: Number, default: 5 }, // Remaining authorized minutes
+  authorizedAmount: { type: Number, required: true }, // Total authorized amount in cents
+  billedAmount: { type: Number, default: 0 }, // Amount billed so far in cents
+  lastBillingTime: { type: Date, default: Date.now }, // Time of last billing update
+  roomId: { type: String, required: true }, // Room ID for the session
+  provider: { type: String, enum: ['zego', 'livekit', 'internal'], default: 'zego' }, // Provider for the session
+  connectionDetails: { type: Map, of: mongoose.Schema.Types.Mixed }, // Provider-specific connection details
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+}, { timestamps: true });
+
+export const Session = mongoose.models.Session || mongoose.model('Session', sessionSchema);
+
+// Client balance schema
+const clientBalanceSchema = new mongoose.Schema({
+  clientId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
+  balance: { type: Number, default: 0 }, // Available balance in cents
+  lockedAmount: { type: Number, default: 0 }, // Amount locked for active sessions
+  lastTopupAmount: { type: Number }, // Amount of last topup
+  lastTopupDate: { type: Date }, // Date of last topup
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+}, { timestamps: true });
+
+export const ClientBalance = mongoose.models.ClientBalance || mongoose.model('ClientBalance', clientBalanceSchema);
+
 // Export database helper functions
 
 // Generic find functions

@@ -4,7 +4,7 @@ import Stripe from 'stripe';
 let stripeInstance: Stripe | null = null;
 
 // Getter function to safely access the Stripe instance
-function getStripe(): Stripe {
+export function getStripeClient(): Stripe {
   if (!stripeInstance) {
     if (!process.env.STRIPE_SECRET_KEY) {
       throw new Error('STRIPE_SECRET_KEY environment variable is missing');
@@ -22,7 +22,7 @@ function getStripe(): Stripe {
 // For consistency with existing code
 const stripe = new Proxy({} as Stripe, {
   get: (target, prop) => {
-    const instance = getStripe();
+    const instance = getStripeClient();
     return instance[prop as keyof Stripe];
   }
 });
