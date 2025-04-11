@@ -19,6 +19,7 @@ export async function connectToDatabase() {
       
       // Try to use the real MongoDB connection first, but fall back to in-memory if it fails
       let uri;
+      let useMemoryServer = false;
       
       try {
         // First try real MongoDB connection
@@ -29,14 +30,32 @@ export async function connectToDatabase() {
         
         log(`Attempting MongoDB connection with URI: ${uri.substring(0, 20)}...`, 'database');
         
-        // Try connecting with a short timeout to fail fast
-        await mongoose.connect(uri, {
-          serverSelectionTimeoutMS: 5000, // Short timeout to fail fast
-        });
-        
-        log('MongoDB Atlas connection successful', 'database');
+        // Get more details about the connection issues
+        const startTime = Date.now();
+        try {
+          // Try connecting with a longer timeout
+          await mongoose.connect(uri, {
+            serverSelectionTimeoutMS: 15000, // Longer timeout to allow for slower connections
+            connectTimeoutMS: 30000,         // Longer timeout for initial connection
+            socketTimeoutMS: 45000,          // Longer timeout for socket operations
+            family: 4,                       // Force IPv4 (sometimes helps with connectivity)
+          });
+          
+          log(`MongoDB Atlas connection successful in ${Date.now() - startTime}ms`, 'database');
+        } catch (connectionError: any) {
+          log(`MongoDB connection error details: ${JSON.stringify({
+            name: connectionError.name,
+            message: connectionError.message,
+            code: connectionError.code,
+            codeName: connectionError.codeName,
+            connectionTime: Date.now() - startTime
+          })}`, 'database');
+          
+          throw connectionError;
+        }
       } catch (error) {
         log(`MongoDB Atlas connection failed: ${error}. Falling back to in-memory MongoDB`, 'database');
+        useMemoryServer = true;
         
         // Fall back to in-memory MongoDB
         if (!mongoMemoryServer) {
@@ -52,12 +71,15 @@ export async function connectToDatabase() {
         process.env.MONGODB_SEED_SAMPLE_DATA = 'true';
       }
       
-      await mongoose.connect(uri, {
-        // Added options for better connection reliability
-        serverSelectionTimeoutMS: 10000, // Timeout after 10 seconds
-        heartbeatFrequencyMS: 30000, // How often to check the connection
-        socketTimeoutMS: 45000, // Close sockets after 45 seconds of inactivity
-      });
+      // Only connect if we haven't already done so above (in the Atlas connection path)
+      if (useMemoryServer) {
+        await mongoose.connect(uri, {
+          // Memory server connection options
+          serverSelectionTimeoutMS: 10000,
+          heartbeatFrequencyMS: 30000,
+          socketTimeoutMS: 45000,
+        });
+      }
       
       // Set up connection event handlers
       mongoose.connection.on('error', (err) => {
@@ -66,6 +88,10 @@ export async function connectToDatabase() {
       
       mongoose.connection.on('disconnected', () => {
         log('MongoDB disconnected, attempting to reconnect...', 'database');
+      });
+      
+      mongoose.connection.on('connected', () => {
+        log('MongoDB connected event fired', 'database');
       });
       
       log('MongoDB connection established successfully', 'database');
