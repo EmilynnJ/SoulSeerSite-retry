@@ -4,6 +4,7 @@ import { storage } from "./storage";
 import { setupWebSocket } from "./websocket";
 import { setupAuth } from "./auth";
 import readingRouter from "./routes/readings";
+import sessionsRouter from "./routes/sessions";
 import { z } from "zod";
 import { scrypt, randomBytes, timingSafeEqual } from "crypto";
 import { promisify } from "util";
@@ -71,6 +72,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Setup authentication routes
   setupAuth(app);
+
+  // Register API routes
+  app.use('/api/sessions', sessionsRouter);
 
   // Create HTTP server
   const httpServer = createServer(app);
