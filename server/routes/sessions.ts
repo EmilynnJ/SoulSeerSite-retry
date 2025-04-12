@@ -843,7 +843,11 @@ router.post('/token', authenticate, async (req: Request, res: Response) => {
     hmac.update(payloadString);
     const token = hmac.digest('base64');
     
-    log(`Generated Zego token for user ${userIdStr} in room ${roomId}`, 'debug');
+    // Log the token generation (with limited info for security)
+    log(`Generated Zego token for user ${userIdStr} in room ${roomId} with appID=${appID}`, 'debug');
+    
+    // Add detailed debug information to help troubleshoot any issues
+    log(`Token generation details: timestamp=${timestamp}, nonce=${nonce}, userName=${userName}`, 'debug');
     
     return res.status(200).json({
       success: true,
