@@ -42,12 +42,11 @@ export async function connectToDatabase() {
         // Connect to MongoDB Atlas with robust connection parameters
         // Connect with standard parameters only
         await mongoose.connect(uri, {
-          serverSelectionTimeoutMS: 120000, // Increased timeout for server selection
-          connectTimeoutMS: 120000,        // Increased timeout for initial connection
-          socketTimeoutMS: 180000,        // Increased timeout for socket operations
+          socketTimeoutMS: 30000,         // Shorter timeout for socket operations
+          connectTimeoutMS: 30000,        // Shorter timeout for initial connection
+          serverSelectionTimeoutMS: 30000, // Shorter timeout for server selection
           family: 4,                      // Force IPv4 (helps with Replit connectivity)
-          maxPoolSize: 10,                // Increased pool size for more connections
-          minPoolSize: 2,                 // Minimum connections
+          maxPoolSize: 5,                 // Reduced pool size for Replit environment
           retryWrites: true,              // Retry write operations
           retryReads: true                // Retry read operations
         });

@@ -1,47 +1,44 @@
-import { MongoClient } from 'mongodb';
+import mongoose from 'mongoose';
+import dotenv from 'dotenv';
 
-// MongoDB Atlas connection string
-const uri = "mongodb+srv://emilynnjj:fjbA7G7TEVmqmwDQ@ssretry3.y7soq.mongodb.net/?retryWrites=true&w=majority";
+dotenv.config();
 
-async function checkCollections() {
-  const client = new MongoClient(uri);
+async function run() {
+  console.log('Connecting to MongoDB Atlas...');
+  const uri = process.env.MONGODB_URI;
   
   try {
-    await client.connect();
-    const db = client.db("soulseer");
+    await mongoose.connect(uri, {
+      retryWrites: true,
+      retryReads: true
+    });
     
-    console.log("Collection counts in MongoDB Atlas:");
+    console.log('MongoDB Atlas connection successful');
     
     // Get all collections
-    const collections = await db.listCollections().toArray();
+    const collections = await mongoose.connection.db.listCollections().toArray();
+    console.log('Available Collections:');
+    collections.forEach(collection => {
+      console.log(`- ${collection.name}`);
+    });
     
-    // Check count for each collection
-    for (const collection of collections) {
-      const count = await db.collection(collection.name).countDocuments();
-      console.log(`${collection.name}: ${count} documents`);
-    }
+    // Count documents in Users collection
+    const userCount = await mongoose.connection.db.collection('users').countDocuments();
+    console.log(`Users collection has ${userCount} documents`);
     
-    // Check specific collections that should have seed data
-    console.log("\nChecking for seeded data:");
-    
-    const forumCategories = await db.collection('forum_categories').find({}).toArray();
-    console.log(`forum_categories: ${forumCategories.length} (Names: ${forumCategories.map(c => c.name).join(', ')})`);
-    
-    const virtualGifts = await db.collection('virtual_gifts').find({}).toArray();
-    console.log(`virtual_gifts: ${virtualGifts.length} (Names: ${virtualGifts.map(g => g.name).join(', ')})`);
-    
-    const plans = await db.collection('plans').find({}).toArray();
-    console.log(`plans: ${plans.length} (Names: ${plans.map(p => p.name).join(', ')})`);
-    
-    const users = await db.collection('users').find({}).toArray();
-    console.log(`users: ${users.length} (${users.map(u => u.username || 'unnamed').join(', ')})`);
+    // Show limited user data
+    const users = await mongoose.connection.db.collection('users').find({}).limit(5).toArray();
+    console.log('Sample users:');
+    users.forEach(user => {
+      console.log(`- ${user.email} (${user.role})`);
+    });
     
   } catch (error) {
-    console.error("Error:", error);
+    console.error('MongoDB connection error:', error);
   } finally {
-    await client.close();
-    console.log("\nConnection closed");
+    await mongoose.connection.close();
+    console.log('MongoDB connection closed');
   }
 }
 
-checkCollections().catch(console.error);
+run().catch(console.error);

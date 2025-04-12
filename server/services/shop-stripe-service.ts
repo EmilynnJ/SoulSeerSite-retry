@@ -153,6 +153,9 @@ export class ShopStripeService {
       
       log(`Found ${stripeProducts.data.length} active products in Stripe`, 'shop-stripe');
       
+      // Wait a short delay to ensure MongoDB connection is fully established
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
       // Process each Stripe product
       for (const stripeProduct of stripeProducts.data) {
         try {
@@ -170,38 +173,49 @@ export class ShopStripeService {
           const stripePrice = prices.data[0];
           const priceAmount = stripePrice.unit_amount ? stripePrice.unit_amount / 100 : 0;
           
-          // Check if product already exists in MongoDB by Stripe ID
-          let product = await mongodb.Product.findOne({ stripeProductId: stripeProduct.id });
-          
-          if (product) {
-            // Update existing product
-            product.name = stripeProduct.name;
-            product.description = stripeProduct.description || '';
-            product.price = priceAmount;
-            product.imageUrl = stripeProduct.images && stripeProduct.images.length > 0 ? stripeProduct.images[0] : null;
-            product.stripePriceId = stripePrice.id;
-            product.category = stripeProduct.metadata?.category || 'Miscellaneous';
-            product.updatedAt = new Date();
+          // Use findOneAndUpdate for atomic operation instead of findOne + save
+          try {
+            // Try to update existing product first
+            const updateResult = await mongodb.Product.findOneAndUpdate(
+              { stripeProductId: stripeProduct.id },
+              {
+                $set: {
+                  name: stripeProduct.name,
+                  description: stripeProduct.description || '',
+                  price: priceAmount,
+                  imageUrl: stripeProduct.images && stripeProduct.images.length > 0 ? stripeProduct.images[0] : null,
+                  stripePriceId: stripePrice.id,
+                  category: stripeProduct.metadata?.category || 'Miscellaneous',
+                  updatedAt: new Date()
+                }
+              },
+              { new: true }
+            );
             
-            await product.save();
-            log(`Updated existing MongoDB product ${product._id} from Stripe product ${stripeProduct.id}`, 'shop-stripe');
-          } else {
-            // Create new product in MongoDB
-            product = await mongodb.Product.create({
-              name: stripeProduct.name,
-              description: stripeProduct.description || '',
-              price: priceAmount,
-              imageUrl: stripeProduct.images && stripeProduct.images.length > 0 ? stripeProduct.images[0] : null,
-              stripeProductId: stripeProduct.id,
-              stripePriceId: stripePrice.id,
-              category: stripeProduct.metadata?.category || 'Miscellaneous',
-              featured: false,
-              inventory: null, // Unlimited inventory by default
-              createdAt: new Date(),
-              updatedAt: new Date()
-            });
-            
-            log(`Created new MongoDB product ${product._id} from Stripe product ${stripeProduct.id}`, 'shop-stripe');
+            if (updateResult) {
+              log(`Updated existing MongoDB product ${updateResult._id} from Stripe product ${stripeProduct.id}`, 'shop-stripe');
+            } else {
+              // Product doesn't exist, create a new one
+              const newProduct = await mongodb.Product.create({
+                name: stripeProduct.name,
+                description: stripeProduct.description || '',
+                price: priceAmount,
+                imageUrl: stripeProduct.images && stripeProduct.images.length > 0 ? stripeProduct.images[0] : null,
+                stripeProductId: stripeProduct.id,
+                stripePriceId: stripePrice.id,
+                category: stripeProduct.metadata?.category || 'Miscellaneous',
+                featured: false,
+                inventory: 999, // Default inventory
+                createdAt: new Date(),
+                updatedAt: new Date()
+              });
+              
+              log(`Created new MongoDB product ${newProduct._id} from Stripe product ${stripeProduct.id}`, 'shop-stripe');
+            }
+          } catch (dbError: any) {
+            log(`Database operation failed for Stripe product ${stripeProduct.id}: ${dbError.message}`, 'shop-stripe-error');
+            // Skip to next product if database operation fails
+            continue;
           }
         } catch (productError: any) {
           log(`Error processing Stripe product ${stripeProduct.id}: ${productError.message}`, 'shop-stripe-error');
@@ -212,7 +226,8 @@ export class ShopStripeService {
       log('Completed import of products from Stripe to MongoDB', 'shop-stripe');
     } catch (error: any) {
       log(`Error importing products from Stripe: ${error.message}`, 'shop-stripe-error');
-      throw error;
+      // Instead of throwing the error, we just log it to prevent the whole sync from failing
+      // This ensures the application can still start up with partial sync
     }
   }
   
