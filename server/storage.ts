@@ -16,7 +16,9 @@ import {
   gifts, type Gift, type NewGift,
   sessions, type Session, type NewSession,
   clientBalances, type ClientBalance, type NewClientBalance,
-  readerBalances, type ReaderBalance, type NewReaderBalance
+  readerBalances, type ReaderBalance, type NewReaderBalance,
+  conversations, type Conversation, type NewConversation,
+  messages, type Message, type NewMessage
 } from "../shared/schema";
 
 import session from "express-session";
