@@ -5,8 +5,18 @@ import { MongoMemoryServer } from 'mongodb-memory-server';
 // Additional connection options
 mongoose.set('strictQuery', false); // For deprecation warning
 
-// MongoDB connection string with fallback
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://emilynnjj:QsFLZ4L4DJSQYSP9@cluster0.npldm3y.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';
+// MongoDB connection string with credentials from environment variable
+let MONGODB_URI = '';
+
+// Use MONGODB_PASSWORD environment variable if available
+if (process.env.MONGODB_PASSWORD) {
+  MONGODB_URI = `mongodb+srv://emilynnjj:${process.env.MONGODB_PASSWORD}@ssretry3.y7soq.mongodb.net/?retryWrites=true&w=majority&appName=SSRETRY3`;
+  log(`Using MongoDB connection with password from environment variables`, 'database');
+} else {
+  // Fallback to original connection string
+  MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://emilynnjj:QsFLZ4L4DJSQYSP9@cluster0.npldm3y.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';
+  log(`Using MongoDB connection from MONGODB_URI or fallback`, 'database');
+}
 
 // In-memory MongoDB server for development
 let mongoMemoryServer: MongoMemoryServer | null = null;
