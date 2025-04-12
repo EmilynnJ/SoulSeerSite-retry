@@ -11,7 +11,7 @@ const router = Router();
 
 // Middleware to verify the user is authenticated
 const authenticate = (req: Request, res: Response, next: Function) => {
-  if (!req.isAuthenticated()) {
+  if (!req.user) {
     return res.status(401).json({ error: 'You must be logged in' });
   }
   next();
@@ -19,7 +19,7 @@ const authenticate = (req: Request, res: Response, next: Function) => {
 
 // Middleware to verify the user is an admin
 const adminOnly = (req: Request, res: Response, next: Function) => {
-  if (!req.user || !req.user.isAdmin) {
+  if (!req.user || req.user.role !== 'admin') {
     return res.status(403).json({ error: 'Admin access required' });
   }
   next();

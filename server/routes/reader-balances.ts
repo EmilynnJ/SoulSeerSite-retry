@@ -14,7 +14,7 @@ const authenticate = (req: Request, res: Response, next: Function) => {
 
 // Middleware to verify the user is an admin
 const adminOnly = (req: Request, res: Response, next: Function) => {
-  if (!req.user || !req.user.isAdmin) {
+  if (!req.user || req.user.role !== 'admin') {
     return res.status(403).json({ error: 'Admin access required' });
   }
   next();
@@ -29,7 +29,7 @@ const readerOrAdminOnly = (req: Request, res: Response, next: Function) => {
   const requestedReaderId = req.params.readerId;
   const userId = req.user.id?.toString();
   
-  if (userId === requestedReaderId || req.user.isAdmin) {
+  if (userId === requestedReaderId || req.user.role === 'admin') {
     next();
   } else {
     return res.status(403).json({ error: 'You can only access your own reader balance' });
