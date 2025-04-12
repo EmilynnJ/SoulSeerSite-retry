@@ -1,6 +1,9 @@
 import Stripe from 'stripe';
-import * as mongodb from '../mongodb';
 import { log } from '../server-only';
+import { db } from '../db';
+import { products } from '../../shared/schema';
+import { eq } from 'drizzle-orm';
+import { storage } from '../storage';
 
 // Initialize Stripe
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', {
@@ -135,13 +138,13 @@ export class ShopStripeService {
   }
   
   /**
-   * Import products from Stripe to MongoDB
+   * Import products from Stripe to PostgreSQL
    * 
-   * This retrieves all products from Stripe and creates or updates them in MongoDB
+   * This retrieves all products from Stripe and creates or updates them in the database
    */
   async importProductsFromStripe(): Promise<void> {
     try {
-      log('Starting import of products from Stripe to MongoDB', 'shop-stripe');
+      log('Starting import of products from Stripe to PostgreSQL', 'shop-stripe');
       
       // Retrieve all active products from Stripe
       const stripeProducts = await stripe.products.list({ active: true });
@@ -152,9 +155,6 @@ export class ShopStripeService {
       }
       
       log(`Found ${stripeProducts.data.length} active products in Stripe`, 'shop-stripe');
-      
-      // Wait a short delay to ensure MongoDB connection is fully established
-      await new Promise(resolve => setTimeout(resolve, 1000));
       
       // Process each Stripe product
       for (const stripeProduct of stripeProducts.data) {
@@ -171,45 +171,47 @@ export class ShopStripeService {
           }
           
           const stripePrice = prices.data[0];
-          const priceAmount = stripePrice.unit_amount ? stripePrice.unit_amount / 100 : 0;
+          const priceAmount = stripePrice.unit_amount ? stripePrice.unit_amount : 0;
           
-          // Use findOneAndUpdate with explicit timeout for atomic operation instead of findOne + save
           try {
-            // First check if product exists to avoid timeout with findOneAndUpdate
-            const existingProduct = await mongodb.Product.findOne(
-              { stripeProductId: stripeProduct.id }
-            ).maxTimeMS(5000);
+            // Check if product exists by stripeProductId
+            const existingProducts = await db.select().from(products)
+              .where(eq(products.stripeProductId, stripeProduct.id));
+            
+            const existingProduct = existingProducts.length > 0 ? existingProducts[0] : null;
             
             if (existingProduct) {
-              // Update existing product with fields
-              existingProduct.name = stripeProduct.name;
-              existingProduct.description = stripeProduct.description || '';
-              existingProduct.price = priceAmount;
-              existingProduct.imageUrl = stripeProduct.images && stripeProduct.images.length > 0 ? stripeProduct.images[0] : null;
-              existingProduct.stripePriceId = stripePrice.id;
-              existingProduct.category = stripeProduct.metadata?.category || 'Miscellaneous';
-              existingProduct.updatedAt = new Date();
+              // Update existing product
+              await db.update(products)
+                .set({
+                  name: stripeProduct.name,
+                  description: stripeProduct.description || '',
+                  price: priceAmount,
+                  imageUrl: stripeProduct.images && stripeProduct.images.length > 0 ? stripeProduct.images[0] : undefined,
+                  stripePriceId: stripePrice.id,
+                  category: stripeProduct.metadata?.category || 'Miscellaneous',
+                  updatedAt: new Date()
+                })
+                .where(eq(products.id, existingProduct.id));
               
-              // Save changes
-              await existingProduct.save();
-              log(`Updated existing MongoDB product ${existingProduct._id} from Stripe product ${stripeProduct.id}`, 'shop-stripe');
+              log(`Updated existing PostgreSQL product ${existingProduct.id} from Stripe product ${stripeProduct.id}`, 'shop-stripe');
             } else {
-              // Product doesn't exist, create a new one
-              const newProduct = await mongodb.Product.create({
-                name: stripeProduct.name,
-                description: stripeProduct.description || '',
-                price: priceAmount,
-                imageUrl: stripeProduct.images && stripeProduct.images.length > 0 ? stripeProduct.images[0] : null,
-                stripeProductId: stripeProduct.id,
-                stripePriceId: stripePrice.id,
-                category: stripeProduct.metadata?.category || 'Miscellaneous',
-                featured: false,
-                inventory: 999, // Default inventory
-                createdAt: new Date(),
-                updatedAt: new Date()
-              });
+              // Create new product
+              const [newProduct] = await db.insert(products)
+                .values({
+                  name: stripeProduct.name,
+                  description: stripeProduct.description || '',
+                  price: priceAmount,
+                  imageUrl: stripeProduct.images && stripeProduct.images.length > 0 ? stripeProduct.images[0] : undefined,
+                  stripeProductId: stripeProduct.id,
+                  stripePriceId: stripePrice.id,
+                  category: stripeProduct.metadata?.category || 'Miscellaneous',
+                  isFeatured: false,
+                  inventory: 999 // Default inventory
+                })
+                .returning();
               
-              log(`Created new MongoDB product ${newProduct._id} from Stripe product ${stripeProduct.id}`, 'shop-stripe');
+              log(`Created new PostgreSQL product ${newProduct.id} from Stripe product ${stripeProduct.id}`, 'shop-stripe');
             }
           } catch (dbError: any) {
             log(`Database operation failed for Stripe product ${stripeProduct.id}: ${dbError.message}`, 'shop-stripe-error');
@@ -222,7 +224,7 @@ export class ShopStripeService {
         }
       }
       
-      log('Completed import of products from Stripe to MongoDB', 'shop-stripe');
+      log('Completed import of products from Stripe to PostgreSQL', 'shop-stripe');
     } catch (error: any) {
       log(`Error importing products from Stripe: ${error.message}`, 'shop-stripe-error');
       // Instead of throwing the error, we just log it to prevent the whole sync from failing

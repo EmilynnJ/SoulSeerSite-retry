@@ -1,287 +1,314 @@
-import { pgTable, text, serial, integer, boolean, timestamp, json, unique, real } from "drizzle-orm/pg-core";
-import { createInsertSchema } from "drizzle-zod";
-import { z } from "zod";
+/**
+ * Database schema for SoulSeer
+ * Using Drizzle ORM
+ */
 
-export const users = pgTable("users", {
-  id: serial("id").primaryKey(),
-  username: text("username").notNull().unique(),
-  password: text("password").notNull(),
-  email: text("email").notNull().unique(),
-  fullName: text("full_name").notNull(),
-  profileImage: text("profile_image"),
-  role: text("role", { enum: ["client", "reader", "admin"] }).notNull().default("client"),
-  bio: text("bio"),
-  specialties: text("specialties").array(),
-  pricing: integer("pricing"), // Legacy field - base price per minute in cents
-  pricingChat: integer("pricing_chat"), // Chat price per minute in cents (legacy)
-  pricingVoice: integer("pricing_voice"), // Voice/phone price per minute in cents (legacy)
-  pricingVideo: integer("pricing_video"), // Video price per minute in cents (legacy)
-  // Fixed pricing for scheduled readings
-  scheduledChatPrice15: integer("scheduled_chat_price_15"), // Fixed price for 15-min chat reading
-  scheduledChatPrice30: integer("scheduled_chat_price_30"), // Fixed price for 30-min chat reading
-  scheduledChatPrice60: integer("scheduled_chat_price_60"), // Fixed price for 60-min chat reading 
-  scheduledVoicePrice15: integer("scheduled_voice_price_15"), // Fixed price for 15-min voice reading
-  scheduledVoicePrice30: integer("scheduled_voice_price_30"), // Fixed price for 30-min voice reading
-  scheduledVoicePrice60: integer("scheduled_voice_price_60"), // Fixed price for 60-min voice reading
-  scheduledVideoPrice15: integer("scheduled_video_price_15"), // Fixed price for 15-min video reading
-  scheduledVideoPrice30: integer("scheduled_video_price_30"), // Fixed price for 30-min video reading
-  scheduledVideoPrice60: integer("scheduled_video_price_60"), // Fixed price for 60-min video reading
-  rating: integer("rating"),
-  reviewCount: integer("review_count").default(0),
-  verified: boolean("verified").default(false),
-  accountBalance: integer("account_balance").default(0), // Account balance in cents
-  createdAt: timestamp("created_at").defaultNow(),
-  lastActive: timestamp("last_active").defaultNow(),
-  isOnline: boolean("is_online").default(false),
-  // No longer using Square - only Stripe
-  // stripeCustomerId field already exists
-  stripeCustomerId: text("stripe_customer_id"), // Stripe customer ID for payment processing
+import { pgTable, serial, varchar, text, boolean, decimal, integer, timestamp, jsonb } from 'drizzle-orm/pg-core';
+import { createInsertSchema } from 'drizzle-zod';
+import { z } from 'zod';
+
+// Users table
+export const users = pgTable('users', {
+  id: serial('id').primaryKey(),
+  username: varchar('username', { length: 100 }).notNull().unique(),
+  email: varchar('email', { length: 255 }).notNull().unique(),
+  password: varchar('password', { length: 255 }).notNull(),
+  fullName: varchar('full_name', { length: 255 }),
+  role: varchar('role', { length: 50 }).notNull().default('user'),
+  profileImage: varchar('profile_image', { length: 255 }),
+  bio: text('bio'),
+  isVerified: boolean('is_verified').default(false),
+  isOnline: boolean('is_online').default(false),
+  isAvailable: boolean('is_available').default(false),
+  stripeCustomerId: varchar('stripe_customer_id', { length: 255 }),
+  stripeConnectId: varchar('stripe_connect_id', { length: 255 }),
+  specialties: text('specialties').array(),
+  yearsOfExperience: integer('years_of_experience'),
+  rating: decimal('rating', { precision: 3, scale: 2 }).default('0'),
+  reviewCount: integer('review_count').default(0),
+  pricingVideo: integer('pricing_video').default(0),
+  pricingVoice: integer('pricing_voice').default(0),
+  pricingChat: integer('pricing_chat').default(0),
+  minimumSessionLength: integer('minimum_session_length').default(5),
+  completedReadings: integer('completed_readings').default(0),
+  totalReadingMinutes: integer('total_reading_minutes').default(0),
+  accountBalance: integer('account_balance').default(0),
+  lastActive: timestamp('last_active'),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow()
 });
 
-export const messages = pgTable("messages", {
-  id: serial("id").primaryKey(),
-  senderId: integer("sender_id").notNull().references(() => users.id),
-  receiverId: integer("receiver_id").notNull().references(() => users.id),
-  content: text("content").notNull(),
-  isPaid: boolean("is_paid").default(false),
-  price: integer("price"),
-  readAt: timestamp("read_at"),
-  createdAt: timestamp("created_at").defaultNow(),
-});
-
-export const readings = pgTable("readings", {
-  id: serial("id").primaryKey(),
-  readerId: integer("reader_id").notNull().references(() => users.id),
-  clientId: integer("client_id").notNull().references(() => users.id),
-  status: text("status", { enum: ["scheduled", "waiting_payment", "payment_completed", "in_progress", "completed", "cancelled"] }).notNull(),
-  type: text("type", { enum: ["chat", "video", "voice"] }).notNull(),
-  readingMode: text("reading_mode", { enum: ["scheduled", "on_demand"] }).notNull(),
-  scheduledFor: timestamp("scheduled_for"),
-  duration: integer("duration").notNull(), // in minutes
-  price: integer("price").notNull(), // Legacy price field (required by database)
-  pricePerMinute: integer("price_per_minute").notNull(), // in cents
-  totalPrice: integer("total_price"), // in cents, calculated after reading completes
-  notes: text("notes"),
-  startedAt: timestamp("started_at"),
-  paymentStatus: text("payment_status", { enum: ["pending", "authorized", "paid", "failed", "refunded"] }).default("pending"),
-  paymentId: text("payment_id"), // Stripe payment intent ID
-  paymentLinkUrl: text("payment_link_url"), // Stripe payment link URL
-  stripeCustomerId: text("stripe_customer_id"), // Stripe customer ID
-  rating: integer("rating"),
-  review: text("review"),
-  createdAt: timestamp("created_at").defaultNow(),
-  completedAt: timestamp("completed_at"),
-});
-
-export const products = pgTable("products", {
-  id: serial("id").primaryKey(),
-  name: text("name").notNull(),
-  description: text("description").notNull(),
-  price: integer("price").notNull(), // in cents
-  imageUrl: text("image_url").notNull(),
-  category: text("category").notNull(),
-  stock: integer("stock").notNull(),
-  featured: boolean("featured").default(false),
-  stripeProductId: text("stripe_product_id"), // Stripe product ID
-  stripePriceId: text("stripe_price_id"), // Stripe price ID
-  createdAt: timestamp("created_at").defaultNow(),
-});
-
-export const orders = pgTable("orders", {
-  id: serial("id").primaryKey(),
-  userId: integer("user_id").notNull().references(() => users.id),
-  status: text("status", { enum: ["pending", "processing", "shipped", "delivered", "cancelled"] }).notNull(),
-  total: integer("total").notNull(), // in cents
-  shippingAddress: json("shipping_address").notNull(),
-  paymentStatus: text("payment_status", { enum: ["pending", "authorized", "paid", "failed", "refunded"] }).default("pending"),
-  stripePaymentIntentId: text("stripe_payment_intent_id"), // Stripe payment intent ID
-  stripeSessionId: text("stripe_session_id"), // Stripe checkout session ID
-  createdAt: timestamp("created_at").defaultNow(),
-});
-
-export const orderItems = pgTable("order_items", {
-  id: serial("id").primaryKey(),
-  orderId: integer("order_id").notNull().references(() => orders.id),
-  productId: integer("product_id").notNull().references(() => products.id),
-  quantity: integer("quantity").notNull(),
-  price: integer("price").notNull(), // in cents
-});
-
-export const livestreams = pgTable("livestreams", {
-  id: serial("id").primaryKey(),
-  userId: integer("user_id").notNull().references(() => users.id),
-  title: text("title").notNull(),
-  description: text("description").notNull(),
-  thumbnailUrl: text("thumbnail_url"),
-  status: text("status", { enum: ["scheduled", "created", "live", "idle", "ended"] }).notNull(),
-  scheduledFor: timestamp("scheduled_for"),
-  startedAt: timestamp("started_at"),
-  endedAt: timestamp("ended_at"),
-  category: text("category").notNull(),
-  viewerCount: integer("viewer_count").default(0),
-  createdAt: timestamp("created_at").defaultNow(),
-  // WebRTC fields
-  roomId: text("room_id"), // Used for WebRTC room identification
-  // Legacy LiveKit fields (keeping for backward compatibility)
-  livekitRoomName: text("livekit_room_name"),
-  duration: real("duration"), // Duration in seconds after stream ends
-});
-
-export const forumPosts = pgTable("forum_posts", {
-  id: serial("id").primaryKey(),
-  userId: integer("user_id").notNull().references(() => users.id),
-  title: text("title").notNull(),
-  content: text("content").notNull(),
-  category: text("category").notNull(),
-  likes: integer("likes").default(0),
-  views: integer("views").default(0),
-  createdAt: timestamp("created_at").defaultNow(),
-  updatedAt: timestamp("updated_at").defaultNow(),
-});
-
-export const forumComments = pgTable("forum_comments", {
-  id: serial("id").primaryKey(),
-  userId: integer("user_id").notNull().references(() => users.id),
-  postId: integer("post_id").notNull().references(() => forumPosts.id),
-  content: text("content").notNull(),
-  likes: integer("likes").default(0),
-  createdAt: timestamp("created_at").defaultNow(),
-  updatedAt: timestamp("updated_at").defaultNow(),
-});
-
-export const gifts = pgTable("gifts", {
-  id: serial("id").primaryKey(),
-  senderId: integer("sender_id").notNull().references(() => users.id),
-  recipientId: integer("recipient_id").notNull().references(() => users.id),
-  livestreamId: integer("livestream_id").references(() => livestreams.id),
-  amount: integer("amount").notNull(), // Amount in cents
-  giftType: text("gift_type", { 
-    enum: ["applause", "heart", "star", "diamond", "custom"] 
-  }).notNull(),
-  message: text("message"),
-  createdAt: timestamp("created_at").defaultNow(),
-  // Stores the split of the gift amount (70% to reader, 30% to platform)
-  readerAmount: integer("reader_amount").notNull(), // 70% of amount in cents
-  platformAmount: integer("platform_amount").notNull(), // 30% of amount in cents
-  processed: boolean("processed").default(false), // Whether the payment has been processed to the reader
-  processedAt: timestamp("processed_at"),
-});
-
-// Insert Schemas
-
+// Create the insert schema for user creation
 export const insertUserSchema = createInsertSchema(users)
-  .omit({ id: true, createdAt: true, lastActive: true, isOnline: true, reviewCount: true });
+  .omit({ id: true, createdAt: true, updatedAt: true });
+
+// Define the types
+export type User = typeof users.$inferSelect;
+export type NewUser = z.infer<typeof insertUserSchema>;
+
+// Readings table
+export const readings = pgTable('readings', {
+  id: serial('id').primaryKey(),
+  clientId: integer('client_id').notNull().references(() => users.id),
+  readerId: integer('reader_id').notNull().references(() => users.id),
+  type: varchar('type', { length: 50 }).notNull(),
+  status: varchar('status', { length: 50 }).notNull().default('requested'),
+  notes: text('notes'),
+  rating: integer('rating'),
+  review: text('review'),
+  duration: integer('duration').default(0),
+  totalAmount: integer('total_amount').default(0),
+  roomId: varchar('room_id', { length: 255 }),
+  scheduledAt: timestamp('scheduled_at'),
+  completedAt: timestamp('completed_at'),
+  clientNotes: text('client_notes'),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow()
+});
 
 export const insertReadingSchema = createInsertSchema(readings)
-  .omit({ 
-    id: true, 
-    createdAt: true, 
-    completedAt: true, 
-    rating: true, 
-    review: true, 
-    startedAt: true, 
-    paymentStatus: true,
-    paymentId: true,
-    paymentLinkUrl: true,
-    stripeCustomerId: true
-  });
+  .omit({ id: true, createdAt: true, updatedAt: true });
+
+export type Reading = typeof readings.$inferSelect;
+export type NewReading = z.infer<typeof insertReadingSchema>;
+
+// Payments table
+export const payments = pgTable('payments', {
+  id: serial('id').primaryKey(),
+  readingId: integer('reading_id').references(() => readings.id),
+  userId: integer('user_id').notNull().references(() => users.id),
+  readerId: integer('reader_id').references(() => users.id),
+  amount: integer('amount').notNull(),
+  status: varchar('status', { length: 50 }).notNull().default('pending'),
+  type: varchar('type', { length: 50 }).notNull(),
+  stripePaymentId: varchar('stripe_payment_id', { length: 255 }),
+  readerShare: integer('reader_share'),
+  platformFee: integer('platform_fee'),
+  metadata: jsonb('metadata'),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow()
+});
+
+export const insertPaymentSchema = createInsertSchema(payments)
+  .omit({ id: true, createdAt: true, updatedAt: true });
+
+export type Payment = typeof payments.$inferSelect;
+export type NewPayment = z.infer<typeof insertPaymentSchema>;
+
+// Products table
+export const products = pgTable('products', {
+  id: serial('id').primaryKey(),
+  name: varchar('name', { length: 255 }).notNull(),
+  description: text('description').notNull(),
+  price: integer('price').notNull(),
+  imageUrl: varchar('image_url', { length: 255 }),
+  category: varchar('category', { length: 100 }).notNull(),
+  inventory: integer('inventory').default(0),
+  isFeatured: boolean('is_featured').default(false),
+  sellerId: integer('seller_id').references(() => users.id),
+  stripeProductId: varchar('stripe_product_id', { length: 255 }),
+  stripePriceId: varchar('stripe_price_id', { length: 255 }),
+  metadata: jsonb('metadata'),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow()
+});
 
 export const insertProductSchema = createInsertSchema(products)
-  .omit({ 
-    id: true, 
-    createdAt: true,
-    stripeProductId: true,
-    stripePriceId: true
-  });
+  .omit({ id: true, createdAt: true, updatedAt: true });
 
-export const insertOrderSchema = createInsertSchema(orders)
-  .omit({ 
-    id: true, 
-    createdAt: true,
-    paymentStatus: true,
-    stripePaymentIntentId: true,
-    stripeSessionId: true
-  });
+export type Product = typeof products.$inferSelect;
+export type NewProduct = z.infer<typeof insertProductSchema>;
 
-export const insertOrderItemSchema = createInsertSchema(orderItems)
-  .omit({ id: true });
+// Livestreams table
+export const livestreams = pgTable('livestreams', {
+  id: serial('id').primaryKey(),
+  hostId: integer('host_id').notNull().references(() => users.id),
+  title: varchar('title', { length: 255 }).notNull(),
+  description: text('description'),
+  status: varchar('status', { length: 50 }).notNull().default('scheduled'),
+  scheduledAt: timestamp('scheduled_at'),
+  startedAt: timestamp('started_at'),
+  endedAt: timestamp('ended_at'),
+  thumbnailUrl: varchar('thumbnail_url', { length: 255 }),
+  viewCount: integer('view_count').default(0),
+  roomId: varchar('room_id', { length: 255 }),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow()
+});
 
 export const insertLivestreamSchema = createInsertSchema(livestreams)
-  .omit({ 
-    id: true, 
-    createdAt: true, 
-    startedAt: true, 
-    endedAt: true, 
-    viewerCount: true,
-    duration: true,
-    // Don't omit roomId as we need it for WebRTC
-    livekitRoomName: true
-  });
+  .omit({ id: true, createdAt: true, updatedAt: true });
 
-export const insertForumPostSchema = createInsertSchema(forumPosts)
-  .omit({ id: true, createdAt: true, updatedAt: true, likes: true, views: true });
+export type Livestream = typeof livestreams.$inferSelect;
+export type NewLivestream = z.infer<typeof insertLivestreamSchema>;
 
-export const insertForumCommentSchema = createInsertSchema(forumComments)
-  .omit({ id: true, createdAt: true, updatedAt: true, likes: true });
+// Orders table
+export const orders = pgTable('orders', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id').notNull().references(() => users.id),
+  status: varchar('status', { length: 50 }).notNull().default('pending'),
+  totalAmount: integer('total_amount').notNull(),
+  stripeSessionId: varchar('stripe_session_id', { length: 255 }),
+  stripePaymentIntentId: varchar('stripe_payment_intent_id', { length: 255 }),
+  shippingAddress: jsonb('shipping_address'),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow()
+});
 
-export const insertMessageSchema = createInsertSchema(messages)
-  .omit({ id: true, createdAt: true, readAt: true });
+export const insertOrderSchema = createInsertSchema(orders)
+  .omit({ id: true, createdAt: true, updatedAt: true });
+
+export type Order = typeof orders.$inferSelect;
+export type NewOrder = z.infer<typeof insertOrderSchema>;
+
+// Order items table
+export const orderItems = pgTable('order_items', {
+  id: serial('id').primaryKey(),
+  orderId: integer('order_id').notNull().references(() => orders.id),
+  productId: integer('product_id').notNull().references(() => products.id),
+  quantity: integer('quantity').notNull(),
+  price: integer('price').notNull(),
+  createdAt: timestamp('created_at').defaultNow()
+});
+
+export const insertOrderItemSchema = createInsertSchema(orderItems)
+  .omit({ id: true, createdAt: true });
+
+export type OrderItem = typeof orderItems.$inferSelect;
+export type NewOrderItem = z.infer<typeof insertOrderItemSchema>;
+
+// Client balances table
+export const clientBalances = pgTable('client_balances', {
+  id: serial('id').primaryKey(),
+  clientId: integer('client_id').notNull().references(() => users.id),
+  balance: integer('balance').default(0),
+  currency: varchar('currency', { length: 10 }).default('usd'),
+  lastUpdated: timestamp('last_updated').defaultNow(),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow()
+});
+
+export const insertClientBalanceSchema = createInsertSchema(clientBalances)
+  .omit({ id: true, createdAt: true, updatedAt: true, lastUpdated: true });
+
+export type ClientBalance = typeof clientBalances.$inferSelect;
+export type NewClientBalance = z.infer<typeof insertClientBalanceSchema>;
+
+// Reader balances table
+export const readerBalances = pgTable('reader_balances', {
+  id: serial('id').primaryKey(),
+  readerId: integer('reader_id').notNull().references(() => users.id),
+  availableBalance: integer('available_balance').default(0),
+  pendingBalance: integer('pending_balance').default(0),
+  lifetimeEarnings: integer('lifetime_earnings').default(0),
+  lastPayout: timestamp('last_payout'),
+  nextScheduledPayout: timestamp('next_scheduled_payout'),
+  payoutMethod: varchar('payout_method', { length: 50 }),
+  payoutDetails: jsonb('payout_details'),
+  currency: varchar('currency', { length: 10 }).default('usd'),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow()
+});
+
+export const insertReaderBalanceSchema = createInsertSchema(readerBalances)
+  .omit({ id: true, createdAt: true, updatedAt: true });
+
+export type ReaderBalance = typeof readerBalances.$inferSelect;
+export type NewReaderBalance = z.infer<typeof insertReaderBalanceSchema>;
+
+// Sessions table
+export const sessions = pgTable('sessions', {
+  id: serial('id').primaryKey(),
+  clientId: integer('client_id').notNull().references(() => users.id),
+  readerId: integer('reader_id').notNull().references(() => users.id),
+  type: varchar('type', { length: 50 }).notNull(),
+  status: varchar('status', { length: 50 }).notNull().default('created'),
+  roomId: varchar('room_id', { length: 255 }).notNull(),
+  startedAt: timestamp('started_at'),
+  endedAt: timestamp('ended_at'),
+  duration: integer('duration').default(0),
+  amountPerMinute: integer('amount_per_minute').notNull(),
+  totalAmount: integer('total_amount').default(0),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow()
+});
+
+export const insertSessionSchema = createInsertSchema(sessions)
+  .omit({ id: true, createdAt: true, updatedAt: true });
+
+export type Session = typeof sessions.$inferSelect;
+export type NewSession = z.infer<typeof insertSessionSchema>;
+
+// Gifts table
+export const gifts = pgTable('gifts', {
+  id: serial('id').primaryKey(),
+  senderId: integer('sender_id').notNull().references(() => users.id),
+  recipientId: integer('recipient_id').notNull().references(() => users.id),
+  livestreamId: integer('livestream_id').references(() => livestreams.id),
+  amount: integer('amount').notNull(),
+  giftType: varchar('gift_type', { length: 50 }).notNull(),
+  message: text('message'),
+  readerAmount: integer('reader_amount').notNull(),
+  platformAmount: integer('platform_amount').notNull(),
+  processed: boolean('processed').default(false),
+  processedAt: timestamp('processed_at'),
+  createdAt: timestamp('created_at').defaultNow()
+});
 
 export const insertGiftSchema = createInsertSchema(gifts)
-  .omit({ id: true, createdAt: true, processed: true, processedAt: true });
-  
-// Types
-export type InsertUser = z.infer<typeof insertUserSchema>;
-export type User = typeof users.$inferSelect;
-export type UserUpdate = Partial<InsertUser> & {
-  isOnline?: boolean;
-  lastActive?: Date;
-  stripeCustomerId?: string;
-  accountBalance?: number;
-  reviewCount?: number;
-  // Fixed pricing for scheduled readings
-  scheduledChatPrice15?: number;
-  scheduledChatPrice30?: number;
-  scheduledChatPrice60?: number;
-  scheduledVoicePrice15?: number;
-  scheduledVoicePrice30?: number;
-  scheduledVoicePrice60?: number;
-  scheduledVideoPrice15?: number;
-  scheduledVideoPrice30?: number;
-  scheduledVideoPrice60?: number;
-};
+  .omit({ id: true, createdAt: true });
 
-export type InsertReading = z.infer<typeof insertReadingSchema>;
-export type Reading = typeof readings.$inferSelect;
-
-export type InsertProduct = z.infer<typeof insertProductSchema>;
-export type Product = typeof products.$inferSelect;
-
-export type InsertOrder = z.infer<typeof insertOrderSchema>;
-export type Order = typeof orders.$inferSelect;
-
-export type InsertOrderItem = z.infer<typeof insertOrderItemSchema>;
-export type OrderItem = typeof orderItems.$inferSelect;
-
-export type InsertLivestream = z.infer<typeof insertLivestreamSchema>;
-export type Livestream = typeof livestreams.$inferSelect;
-export type LivestreamUpdate = Partial<InsertLivestream> & {
-  startedAt?: Date;
-  endedAt?: Date;
-  viewerCount?: number;
-  duration?: number;
-  roomId?: string;
-  livekitRoomName?: string;
-};
-
-export type InsertForumPost = z.infer<typeof insertForumPostSchema>;
-export type ForumPost = typeof forumPosts.$inferSelect;
-
-export type InsertForumComment = z.infer<typeof insertForumCommentSchema>;
-export type ForumComment = typeof forumComments.$inferSelect;
-
-export type InsertMessage = z.infer<typeof insertMessageSchema>;
-export type Message = typeof messages.$inferSelect;
-
-export type InsertGift = z.infer<typeof insertGiftSchema>;
 export type Gift = typeof gifts.$inferSelect;
+export type NewGift = z.infer<typeof insertGiftSchema>;
+
+// Forum categories table
+export const forumCategories = pgTable('forum_categories', {
+  id: serial('id').primaryKey(),
+  name: varchar('name', { length: 255 }).notNull(),
+  slug: varchar('slug', { length: 255 }).notNull().unique(),
+  description: text('description'),
+  createdAt: timestamp('created_at').defaultNow()
+});
+
+export const insertForumCategorySchema = createInsertSchema(forumCategories)
+  .omit({ id: true, createdAt: true });
+
+export type ForumCategory = typeof forumCategories.$inferSelect;
+export type NewForumCategory = z.infer<typeof insertForumCategorySchema>;
+
+// Forum threads table
+export const forumThreads = pgTable('forum_threads', {
+  id: serial('id').primaryKey(),
+  categoryId: integer('category_id').notNull().references(() => forumCategories.id),
+  userId: integer('user_id').notNull().references(() => users.id),
+  title: varchar('title', { length: 255 }).notNull(),
+  slug: varchar('slug', { length: 255 }).notNull(),
+  content: text('content').notNull(),
+  isPinned: boolean('is_pinned').default(false),
+  isLocked: boolean('is_locked').default(false),
+  views: integer('views').default(0),
+  lastActivity: timestamp('last_activity').defaultNow(),
+  createdAt: timestamp('created_at').defaultNow()
+});
+
+export const insertForumThreadSchema = createInsertSchema(forumThreads)
+  .omit({ id: true, createdAt: true, lastActivity: true });
+
+export type ForumThread = typeof forumThreads.$inferSelect;
+export type NewForumThread = z.infer<typeof insertForumThreadSchema>;
+
+// Forum posts table
+export const forumPosts = pgTable('forum_posts', {
+  id: serial('id').primaryKey(),
+  threadId: integer('thread_id').notNull().references(() => forumThreads.id),
+  userId: integer('user_id').notNull().references(() => users.id),
+  content: text('content').notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow()
+});
+
+export const insertForumPostSchema = createInsertSchema(forumPosts)
+  .omit({ id: true, createdAt: true, updatedAt: true });
+
+export type ForumPost = typeof forumPosts.$inferSelect;
+export type NewForumPost = z.infer<typeof insertForumPostSchema>;

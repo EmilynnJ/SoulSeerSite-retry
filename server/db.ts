@@ -1,17 +1,28 @@
+/**
+ * PostgreSQL database connection for SoulSeer
+ * Using Drizzle ORM
+ */
+
 import { drizzle } from 'drizzle-orm/node-postgres';
 import pg from 'pg';
-import * as schema from '@shared/schema';
+import * as schema from '../shared/schema';
+import dotenv from 'dotenv';
 
 const { Pool } = pg;
 
-// Create a PostgreSQL pool using the DATABASE_URL environment variable
+// Load environment variables
+dotenv.config();
+
+// Create a PostgreSQL connection pool
 export const pool = new Pool({ 
   connectionString: process.env.DATABASE_URL,
-  max: 20,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 10000,
-  maxUses: 7500 // Close connections after too many uses
+  ssl: {
+    rejectUnauthorized: false // Required for some PostgreSQL providers
+  }
 });
 
-// Initialize Drizzle with the pool and schema
+// Create a Drizzle instance
 export const db = drizzle(pool, { schema });
+
+// Export for use in other server files
+export default db;

@@ -1,7 +1,7 @@
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes.js";
 import { setupVite, serveStatic, log } from "./vite.js";
-import { connectToDatabase } from "./mongodb";
+import { db, pool } from "./db";
 import { config } from "dotenv";
 import path from "path";
 import sessionsRoutes from "./routes/sessions";
@@ -87,15 +87,21 @@ app.use((req, res, next) => {
   
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      // Connect to MongoDB database before registering routes
-      await connectToDatabase();
-      log('MongoDB connection established successfully', 'database');
+      // Test PostgreSQL connection before registering routes
+      const client = await pool.connect();
+      
+      // Run a simple query to verify connection
+      const result = await client.query('SELECT version()');
+      log(`PostgreSQL connection established successfully: ${result.rows[0].version}`, 'database');
+      
+      // Release the client back to the pool
+      client.release();
       break;
     } catch (error) {
-      log(`MongoDB connection attempt ${attempt} failed: ${error}`, 'database');
+      log(`PostgreSQL connection attempt ${attempt} failed: ${error}`, 'database');
       
       if (attempt === MAX_RETRIES) {
-        log('All MongoDB connection attempts failed. Exiting.', 'database');
+        log('All PostgreSQL connection attempts failed. Exiting.', 'database');
         process.exit(1);
       }
       
