@@ -114,6 +114,15 @@ app.use((req, res, next) => {
     console.error('Failed to initialize WebRTC service:', error);
   }
   
+  // Initialize the Chat service with the HTTP server
+  try {
+    const { chatService } = await import('./services/chat-service');
+    chatService.initialize(server);
+    console.log('Chat service initialized successfully');
+  } catch (error) {
+    console.error('Failed to initialize Chat service:', error);
+  }
+  
   // Initialize the Livestream service with the HTTP server
   try {
     const { livestreamService } = await import('./services/livestream-service');
