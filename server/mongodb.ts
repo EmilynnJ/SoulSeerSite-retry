@@ -10,85 +10,61 @@ let MONGODB_URI = '';
 
 // Use MONGODB_PASSWORD environment variable if available
 if (process.env.MONGODB_PASSWORD) {
-  MONGODB_URI = `mongodb+srv://emilynnjj:${process.env.MONGODB_PASSWORD}@cluster0.q84zjg1.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
-  log(`Using MongoDB connection with password from environment variables`, 'database');
+  // Connection string for MongoDB Atlas with parameters to handle connection issues
+  MONGODB_URI = `mongodb+srv://emilynnjj:${process.env.MONGODB_PASSWORD}@cluster0.q84zjg1.mongodb.net/SoulSeer?retryWrites=true&w=majority&appName=Cluster0`;
+  log(`Using MongoDB Atlas with password from environment variables`, 'database');
 } else {
-  // Fallback to original connection string
-  MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://emilynnjj:QsFLZ4L4DJSQYSP9@cluster0.q84zjg1.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';
+  // Fallback connection string 
+  MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://emilynnjj:QsFLZ4L4DJSQYSP9@cluster0.q84zjg1.mongodb.net/SoulSeer?retryWrites=true&w=majority&appName=Cluster0';
   log(`Using MongoDB connection from MONGODB_URI or fallback`, 'database');
 }
 
 // In-memory MongoDB server for development
 let mongoMemoryServer: MongoMemoryServer | null = null;
 
-// Create database connection
+// Create database connection - FORCE MongoDB Atlas ONLY
 export async function connectToDatabase() {
   try {
     if (mongoose.connection.readyState !== 1) {
-      log('Connecting to MongoDB...', 'database');
+      log('Connecting to MongoDB Atlas (FORCED)...', 'database');
       
-      // Try to use the real MongoDB connection first, but fall back to in-memory if it fails
-      let uri;
-      let useMemoryServer = false;
-      
-      try {
-        // First try real MongoDB connection
-        uri = MONGODB_URI;
-        if (!uri) {
-          throw new Error('MONGODB_URI is not defined');
-        }
-        
-        log(`Attempting MongoDB connection with URI: ${uri.substring(0, 20)}...`, 'database');
-        
-        // Get more details about the connection issues
-        const startTime = Date.now();
-        try {
-          // Try connecting with a longer timeout
-          await mongoose.connect(uri, {
-            serverSelectionTimeoutMS: 15000, // Longer timeout to allow for slower connections
-            connectTimeoutMS: 30000,         // Longer timeout for initial connection
-            socketTimeoutMS: 45000,          // Longer timeout for socket operations
-            family: 4,                       // Force IPv4 (sometimes helps with connectivity)
-          });
-          
-          log(`MongoDB Atlas connection successful in ${Date.now() - startTime}ms`, 'database');
-        } catch (connectionError: any) {
-          log(`MongoDB connection error details: ${JSON.stringify({
-            name: connectionError.name,
-            message: connectionError.message,
-            code: connectionError.code,
-            codeName: connectionError.codeName,
-            connectionTime: Date.now() - startTime
-          })}`, 'database');
-          
-          throw connectionError;
-        }
-      } catch (error) {
-        log(`MongoDB Atlas connection failed: ${error}. Falling back to in-memory MongoDB`, 'database');
-        useMemoryServer = true;
-        
-        // Fall back to in-memory MongoDB
-        if (!mongoMemoryServer) {
-          log('Starting MongoDB Memory Server...', 'database');
-          mongoMemoryServer = await MongoMemoryServer.create();
-          log('MongoDB Memory Server started successfully', 'database');
-        }
-        
-        uri = mongoMemoryServer.getUri();
-        log(`Using in-memory MongoDB at ${uri}`, 'database');
-        
-        // Set flag to create sample data after connection
-        process.env.MONGODB_SEED_SAMPLE_DATA = 'true';
+      // ONLY use MongoDB Atlas - no fallback
+      const uri = MONGODB_URI;
+      if (!uri) {
+        throw new Error('MONGODB_URI is not defined');
       }
       
-      // Only connect if we haven't already done so above (in the Atlas connection path)
-      if (useMemoryServer) {
+      log(`Attempting MongoDB Atlas connection...`, 'database');
+      
+      // Get more details about the connection issues
+      const startTime = Date.now();
+      try {
+        // Connect to MongoDB Atlas with robust connection parameters
         await mongoose.connect(uri, {
-          // Memory server connection options
-          serverSelectionTimeoutMS: 10000,
-          heartbeatFrequencyMS: 30000,
-          socketTimeoutMS: 45000,
+          serverSelectionTimeoutMS: 30000, // Long timeout for server selection
+          connectTimeoutMS: 45000,        // Long timeout for initial connection
+          socketTimeoutMS: 60000,         // Long timeout for socket operations
+          family: 4,                      // Force IPv4 (helps with Replit connectivity)
+          heartbeatFrequencyMS: 50000,    // Less frequent heartbeats
+          maxPoolSize: 10,                // Limit connections in the pool
+          minPoolSize: 2,                 // Maintain minimum connections
+          maxIdleTimeMS: 60000,           // Close idle connections after 1 minute
+          retryWrites: true,              // Retry write operations
+          retryReads: true,               // Retry read operations
         });
+        
+        log(`MongoDB Atlas connection successful in ${Date.now() - startTime}ms`, 'database');
+      } catch (connectionError: any) {
+        log(`MongoDB Atlas connection error details: ${JSON.stringify({
+          name: connectionError.name,
+          message: connectionError.message,
+          code: connectionError.code,
+          codeName: connectionError.codeName,
+          connectionTime: Date.now() - startTime
+        })}`, 'database');
+        
+        // Re-throw the error - NO FALLBACK
+        throw new Error(`Failed to connect to MongoDB Atlas. Make sure your connection string and network settings are correct: ${connectionError.message}`);
       }
       
       // Set up connection event handlers
