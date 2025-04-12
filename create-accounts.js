@@ -1,167 +1,203 @@
 /**
  * Script to create specific user accounts for SoulSeer application
  */
-import mongoose from 'mongoose';
 import bcrypt from 'bcrypt';
-import 'dotenv/config';
+import { MongoClient, ServerApiVersion } from 'mongodb';
 
-// MongoDB connection string
-const MONGODB_URI = process.env.MONGODB_PASSWORD 
-  ? `mongodb+srv://emilynnjj:${process.env.MONGODB_PASSWORD}@ssretry3.y7soq.mongodb.net/?retryWrites=true&w=majority&appName=SSRETRY3`
-  : process.env.MONGODB_URI || 'mongodb+srv://emilynnjj:QsFLZ4L4DJSQYSP9@cluster0.npldm3y.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';
+// Connection string to MongoDB Atlas
+const uri = "mongodb+srv://emilynnjj:QsFLZ4L4DJSQYSP9@ssretry3.y7soq.mongodb.net/?retryWrites=true&w=majority&appName=SSRETRY3";
+// Create a MongoClient with a MongoClientOptions object
+const client = new MongoClient(uri, {
+  serverApi: {
+    version: ServerApiVersion.v1,
+    strict: true,
+    deprecationErrors: true,
+  }
+});
 
-console.log('Connecting to MongoDB...');
+// Test users to add
+const users = [
+  {
+    username: "emilynnjadmin",
+    email: "emilynnj14@gmail.com",
+    password: "JayJas1423!",
+    fullName: "Emily Admin",
+    role: "admin",
+    profileImage: "/images/default-profile.png",
+    bio: "SoulSeer platform administrator.",
+    isVerified: true,
+    isOnline: false,
+    pricingVideo: 0,
+    pricingVoice: 0,
+    pricingChat: 0
+  },
+  {
+    username: "emilynn992",
+    email: "emilynn992@gmail.com",
+    password: "JayJas1423!",
+    fullName: "Emily Reader",
+    role: "reader",
+    profileImage: "/images/default-profile.png",
+    bio: "Experienced psychic medium with focus on tarot readings.",
+    specialties: ["Tarot", "Medium", "Spiritual Guidance"],
+    yearsOfExperience: 5,
+    rating: 4.8,
+    reviewCount: 24,
+    isVerified: true,
+    isOnline: false,
+    isAvailable: true,
+    pricingVideo: 200, // $2.00/min
+    pricingVoice: 150, // $1.50/min
+    pricingChat: 100,  // $1.00/min
+    minimumSessionLength: 5, // 5 minutes minimum
+    completedReadings: 32
+  },
+  {
+    username: "emilyclient",
+    email: "emily81292@gmail.com",
+    password: "Jade2014!",
+    fullName: "Emily Client",
+    role: "client",
+    profileImage: "/images/default-profile.png",
+    bio: "",
+    isVerified: true,
+    isOnline: false
+  }
+];
 
-// User schema
-const userSchema = new mongoose.Schema({
-  username: { type: String, unique: true, required: true },
-  email: { type: String, unique: true, required: true },
-  password: { type: String, required: true },
-  fullName: String,
-  role: { type: String, enum: ['admin', 'user', 'reader', 'client'], default: 'user' },
-  profileImage: String,
-  bio: String,
-  
-  // Account status
-  isVerified: { type: Boolean, default: false },
-  isOnline: { type: Boolean, default: false },
-  isAvailable: { type: Boolean, default: false },
-  
-  // Payment information
-  stripeCustomerId: String,
-  stripeConnectId: String,
-  
-  // Reader-specific fields
-  specialties: [String], 
-  yearsOfExperience: Number,
-  rating: { type: Number, min: 0, max: 5, default: 0 },
-  reviewCount: { type: Number, default: 0 },
-  
-  // Reader pricing (in cents)
-  pricingVideo: { type: Number, default: 0 },
-  pricingVoice: { type: Number, default: 0 },
-  pricingChat: { type: Number, default: 0 },
-  minimumSessionLength: { type: Number, default: 5 },
-  
-  // Reader statistics
-  completedReadings: { type: Number, default: 0 },
-  totalReadingMinutes: { type: Number, default: 0 },
-  
-  // Account balance
-  accountBalance: { type: Number, default: 0 },
-  
-  // Timestamps
-  lastActive: { type: Date },
-  createdAt: { type: Date, default: Date.now },
-  updatedAt: { type: Date, default: Date.now }
-}, { timestamps: true });
+// Hash passwords before storing
+async function hashPassword(password) {
+  const saltRounds = 10;
+  return bcrypt.hash(password, saltRounds);
+}
 
-// Create User model
-const User = mongoose.model('User', userSchema);
-
-// Function to create or update user
+// Create or update a user
 async function createOrUpdateUser(userData) {
   try {
+    // Hash the password
+    const hashedPassword = await hashPassword(userData.password);
+    
+    // Create user object with hashed password
+    const user = {
+      ...userData,
+      password: hashedPassword,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    
     // Check if user exists
-    const existingUser = await User.findOne({ email: userData.email });
+    const db = client.db("soulseer");
+    const collection = db.collection("users");
+    const existingUser = await collection.findOne({ email: userData.email });
     
     if (existingUser) {
-      console.log(`User with email ${userData.email} already exists. Updating password...`);
-      
-      // Update password
-      existingUser.password = await bcrypt.hash(userData.password, 10);
-      await existingUser.save();
-      
-      console.log(`Updated password for ${userData.email}`);
-      return { success: true, user: existingUser, action: 'updated' };
+      console.log(`User ${userData.email} already exists. Updating...`);
+      const result = await collection.updateOne(
+        { email: userData.email },
+        { $set: { ...user, _id: existingUser._id } }
+      );
+      console.log(`User ${userData.email} updated: ${result.modifiedCount} document modified`);
+      return existingUser._id;
     } else {
-      // Create new user
-      const hashedPassword = await bcrypt.hash(userData.password, 10);
-      const newUser = await User.create({
-        ...userData,
-        password: hashedPassword,
-        isVerified: true
-      });
-      
-      console.log(`Created new user: ${userData.email} with role ${userData.role}`);
-      return { success: true, user: newUser, action: 'created' };
+      console.log(`Creating new user: ${userData.email}`);
+      const result = await collection.insertOne(user);
+      console.log(`User ${userData.email} created with ID: ${result.insertedId}`);
+      return result.insertedId;
     }
   } catch (error) {
     console.error(`Error creating/updating user ${userData.email}:`, error);
-    return { success: false, error };
+    throw error;
   }
 }
 
-// Connect to MongoDB and create users
 async function main() {
   try {
-    await mongoose.connect(MONGODB_URI, {
-      serverSelectionTimeoutMS: 15000, // Longer timeout to allow for slower connections
-      connectTimeoutMS: 30000,         // Longer timeout for initial connection
-      socketTimeoutMS: 45000,          // Longer timeout for socket operations
-      family: 4                        // Force IPv4 (sometimes helps with connectivity)
-    });
+    // Connect to MongoDB
+    await client.connect();
+    console.log("Connected successfully to MongoDB Atlas");
     
-    console.log('Connected to MongoDB successfully');
+    // Create database and collections if they don't exist
+    const db = client.db("soulseer");
+    console.log("Using database: soulseer");
     
-    // Define users to create/update
-    const users = [
-      {
-        username: 'emilynnj',
-        email: 'emilynnj14@gmail.com',
-        password: 'JayJas1423!',
-        fullName: 'Emily Admin',
-        role: 'admin',
-        bio: 'SoulSeer Administrator',
-        isVerified: true,
-        isOnline: true
-      },
-      {
-        username: 'emilynn992',
-        email: 'emilynn992@gmail.com',
-        password: 'JayJas1423!', 
-        fullName: 'Emily Reader',
-        role: 'reader',
-        bio: 'Professional psychic and spiritual advisor',
-        specialties: ['Tarot', 'Mediumship', 'Energy Healing'],
-        yearsOfExperience: 8,
-        rating: 4.8,
-        pricingVideo: 200, // $2.00 per minute
-        pricingVoice: 150, // $1.50 per minute
-        pricingChat: 100,  // $1.00 per minute
-        isVerified: true,
-        isOnline: true,
-        isAvailable: true
-      },
-      {
-        username: 'emily81292',
-        email: 'emily81292@gmail.com',
-        password: 'Jade2014!',
-        fullName: 'Emily Client',
-        role: 'client',
-        bio: 'Seeking spiritual guidance',
-        isVerified: true,
-        isOnline: true
-      }
+    // Create collections if they don't exist
+    const collections = [
+      "users", "readings", "payments", "products", 
+      "livestreams", "orders", "sessions", 
+      "clientbalances", "readerbalances",
+      "forumcategories", "forumthreads", "forumposts"
     ];
     
-    // Create/update each user
-    const results = [];
-    for (const userData of users) {
-      const result = await createOrUpdateUser(userData);
-      results.push(result);
+    const existingCollections = await db.listCollections().toArray();
+    const existingCollectionNames = existingCollections.map(c => c.name);
+    
+    for (const collName of collections) {
+      if (!existingCollectionNames.includes(collName)) {
+        await db.createCollection(collName);
+        console.log(`Created collection: ${collName}`);
+      } else {
+        console.log(`Collection already exists: ${collName}`);
+      }
     }
     
-    console.log('Operation completed:');
-    console.log(results.map(r => `${r.action} ${r.user?.email} (${r.user?.role})`).join('\n'));
+    // Create/update users
+    for (const userData of users) {
+      const userId = await createOrUpdateUser(userData);
+      
+      // Create balance records for readers and clients
+      if (userData.role === 'reader') {
+        const readerBalance = {
+          readerId: userId,
+          currentBalance: 0,
+          pendingBalance: 0,
+          lifetimeEarnings: 0,
+          lastPayoutDate: null,
+          lastPayoutAmount: 0,
+          createdAt: new Date(),
+          updatedAt: new Date()
+        };
+        
+        const readerBalanceCollection = db.collection("readerbalances");
+        const existingBalance = await readerBalanceCollection.findOne({ readerId: userId });
+        
+        if (existingBalance) {
+          console.log(`Reader balance record already exists for user ${userData.email}`);
+        } else {
+          await readerBalanceCollection.insertOne(readerBalance);
+          console.log(`Created reader balance record for user ${userData.email}`);
+        }
+      }
+      
+      if (userData.role === 'client') {
+        const clientBalance = {
+          clientId: userId,
+          currentBalance: 0,
+          lifetimeSpent: 0,
+          lastDepositDate: null,
+          lastDepositAmount: 0,
+          createdAt: new Date(),
+          updatedAt: new Date()
+        };
+        
+        const clientBalanceCollection = db.collection("clientbalances");
+        const existingBalance = await clientBalanceCollection.findOne({ clientId: userId });
+        
+        if (existingBalance) {
+          console.log(`Client balance record already exists for user ${userData.email}`);
+        } else {
+          await clientBalanceCollection.insertOne(clientBalance);
+          console.log(`Created client balance record for user ${userData.email}`);
+        }
+      }
+    }
     
+    console.log("All accounts created/updated successfully!");
   } catch (error) {
-    console.error('Error:', error);
+    console.error("Error in main function:", error);
   } finally {
-    await mongoose.disconnect();
-    console.log('Disconnected from MongoDB');
+    await client.close();
+    console.log("MongoDB connection closed");
   }
 }
 
-// Run the main function
-main().catch(console.error);
+main();
