@@ -12,9 +12,9 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useToast } from '@/hooks/use-toast';
 import { MessageCircle, Send, UserPlus } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
-import { MessageList } from '@/components/messages/message-list';
-import { ConversationList } from '@/components/messages/conversation-list';
-import { NewConversationDialog } from '@/components/messages/new-conversation-dialog';
+import { MessageList } from '../components/messages/message-list';
+import { ConversationList } from '../components/messages/conversation-list';
+import { NewConversationDialog } from '../components/messages/new-conversation-dialog';
 
 export interface Conversation {
   id: number;
@@ -91,11 +91,12 @@ const MessagesPage: React.FC = () => {
 
   // Send a new message
   const sendMessageMutation = useMutation({
-    mutationFn: (newMessage: { conversationId: number, content: string }) => {
-      return apiRequest('/api/messages', {
+    mutationFn: async (newMessage: { conversationId: number, content: string }) => {
+      const response = await apiRequest('/api/messages', {
         method: 'POST',
         data: newMessage
       });
+      return response;
     },
     onSuccess: () => {
       // Clear input field
@@ -115,10 +116,11 @@ const MessagesPage: React.FC = () => {
 
   // Mark messages as read when a conversation is opened
   const markAsReadMutation = useMutation({
-    mutationFn: (messageId: number) => {
-      return apiRequest(`/api/messages/${messageId}/read`, {
+    mutationFn: async (messageId: number) => {
+      const response = await apiRequest(`/api/messages/${messageId}/read`, {
         method: 'PATCH'
       });
+      return response;
     },
     onSuccess: () => {
       // Invalidate queries to refresh the message list and unread count

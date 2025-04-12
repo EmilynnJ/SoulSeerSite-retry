@@ -49,11 +49,12 @@ export const NewConversationDialog: React.FC<NewConversationDialogProps> = ({
 
   // Create a new conversation
   const createConversationMutation = useMutation({
-    mutationFn: (otherUserId: number) => {
-      return apiRequest('/api/conversations', {
+    mutationFn: async (otherUserId: number) => {
+      const response = await apiRequest('/api/conversations', {
         method: 'POST',
         data: { otherUserId }
       });
+      return response;
     },
     onSuccess: (data) => {
       onConversationCreated(data);
