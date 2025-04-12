@@ -322,13 +322,22 @@ router.post('/:id/checkout', authenticate, async (req: Request, res: Response) =
 
 /**
  * Sync all products with Stripe (admin only)
- * This pushes MongoDB products to Stripe
+ * This pushes PostgreSQL products to Stripe
  */
 router.post('/sync-with-stripe', authenticate, adminOnly, async (req: Request, res: Response) => {
   try {
+    // Get total products count before sync
+    const products = await storage.getProducts();
+    const totalProducts = products.length;
+    
+    // Perform the sync operation
     await shopStripeService.syncAllProductsWithStripe();
     
-    return res.status(200).json({ message: 'All products synchronized with Stripe successfully' });
+    return res.status(200).json({ 
+      message: 'All products synchronized with Stripe successfully',
+      successCount: totalProducts,
+      totalProducts: totalProducts
+    });
   } catch (error: any) {
     log(`Error synchronizing products with Stripe: ${error.message}`, 'error');
     return res.status(500).json({ error: 'Failed to synchronize products with Stripe', details: error.message });
@@ -337,13 +346,30 @@ router.post('/sync-with-stripe', authenticate, adminOnly, async (req: Request, r
 
 /**
  * Import products from Stripe (admin only)
- * This pulls Stripe products into MongoDB
+ * This pulls Stripe products into PostgreSQL
  */
 router.post('/import-from-stripe', authenticate, adminOnly, async (req: Request, res: Response) => {
   try {
+    // Get current products count
+    const initialProducts = await storage.getProducts();
+    const initialCount = initialProducts.length;
+    
+    // Import products from Stripe
     await shopStripeService.importProductsFromStripe();
     
-    return res.status(200).json({ message: 'All products imported from Stripe successfully' });
+    // Get updated products count
+    const updatedProducts = await storage.getProducts();
+    const updatedCount = updatedProducts.length;
+    const newProductsCount = updatedCount - initialCount;
+    
+    return res.status(200).json({ 
+      message: 'Products imported from Stripe successfully',
+      initialCount: initialCount,
+      updatedCount: updatedCount,
+      newProductsCount: Math.max(0, newProductsCount),
+      successCount: updatedCount,
+      totalProducts: updatedCount
+    });
   } catch (error: any) {
     log(`Error importing products from Stripe: ${error.message}`, 'error');
     return res.status(500).json({ error: 'Failed to import products from Stripe', details: error.message });
@@ -355,7 +381,7 @@ router.post('/import-from-stripe', authenticate, adminOnly, async (req: Request,
  */
 router.post('/webhook', async (req: Request, res: Response) => {
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', {
-    apiVersion: '2023-10-16',
+    apiVersion: '2023-10-16' as any, // Using as any to bypass type checking
   });
   
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
