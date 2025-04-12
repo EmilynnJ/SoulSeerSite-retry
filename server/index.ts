@@ -6,6 +6,7 @@ import { config } from "dotenv";
 import path from "path";
 import sessionsRoutes from "./routes/sessions";
 import payPerMinuteRoutes from "./routes/pay-per-minute";
+import shopRoutes from "./routes/shop";
 import cors from "cors";
 
 // Load environment variables
@@ -106,6 +107,9 @@ app.use((req, res, next) => {
   
   // Register pay-per-minute routes
   app.use('/api/pay-per-minute', payPerMinuteRoutes);
+  
+  // Register shop routes
+  app.use('/api/products', shopRoutes);
   
   const server = await registerRoutes(app);
   

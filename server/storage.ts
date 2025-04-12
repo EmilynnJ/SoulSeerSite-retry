@@ -1032,7 +1032,28 @@ export class MongoDBStorage implements IStorage {
   }
 
   async getProducts(): Promise<Product[]> {
-    return await db.select().from(products);
+    try {
+      log('Fetching products from MongoDB', 'storage');
+      const allProducts = await mongodb.Product.find().lean();
+      
+      // Convert MongoDB documents to Product type
+      return allProducts.map(product => ({
+        id: parseInt(product._id.toString().substring(0, 8), 16), // Generate numeric ID from MongoDB ObjectId
+        name: product.name,
+        price: product.price,
+        description: product.description,
+        imageUrl: product.imageUrl,
+        category: product.category,
+        stock: product.inventory || 0,
+        featured: product.featured || false,
+        stripeProductId: product.stripeProductId || null,
+        stripePriceId: product.stripePriceId || null,
+        createdAt: product.createdAt
+      }));
+    } catch (error) {
+      log(`Error fetching products from MongoDB: ${error}`, 'storage');
+      throw error;
+    }
   }
 
   async getFeaturedProducts(): Promise<Product[]> {
