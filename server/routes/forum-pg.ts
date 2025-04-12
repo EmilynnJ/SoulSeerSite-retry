@@ -143,6 +143,11 @@ export function createForumRouter(storage: IStorage) {
       // Create thread with slug
       const slug = slugify(title, { lower: true });
       
+      // Check if user is authenticated
+      if (!req.user) {
+        return res.status(401).json({ message: 'User not authenticated' });
+      }
+
       const thread = await storage.createForumThread({
         categoryId,
         userId: req.user.id,
@@ -249,6 +254,11 @@ export function createForumRouter(storage: IStorage) {
         return res.status(403).json({ message: 'This thread is locked and cannot receive new posts' });
       }
       
+      // Check if user is authenticated
+      if (!req.user) {
+        return res.status(401).json({ message: 'User not authenticated' });
+      }
+      
       // Create post
       const post = await storage.createForumPost({
         threadId,
@@ -259,8 +269,8 @@ export function createForumRouter(storage: IStorage) {
       // Update thread's timestamp to reflect latest activity
       await storage.updateForumThread(threadId, {});
       
-      // Get author
-      const author = await storage.getUser(req.user.id);
+      // Get author - we already validated req.user exists above
+      const author = await storage.getUser(req.user!.id);
       
       res.status(201).json({
         ...post,
