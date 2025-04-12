@@ -1853,81 +1853,248 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Messages
-  app.get("/api/messages/:userId", async (req, res) => {
-    if (!req.isAuthenticated()) {
-      return res.status(401).json({ message: "Not authenticated" });
-    }
-
+  // Messaging system endpoints
+  
+  // Conversations endpoints
+  app.get("/api/conversations", authenticate, async (req, res) => {
     try {
-      const userId = parseInt(req.params.userId);
-      if (isNaN(userId)) {
-        return res.status(400).json({ message: "Invalid user ID" });
-      }
-
-      const messages = await storage.getMessagesByUsers(req.user.id, userId);
-      res.json(messages);
+      const conversations = await storage.getConversationsByUser(req.user.id);
+      
+      // Fetch user details for each conversation to display names/images
+      const conversationsWithDetails = await Promise.all(
+        conversations.map(async (conversation) => {
+          // Get the other user in the conversation (not the current user)
+          const otherUserId = conversation.user1Id === req.user.id 
+            ? conversation.user2Id 
+            : conversation.user1Id;
+          
+          const otherUser = await storage.getUser(otherUserId);
+          
+          return {
+            ...conversation,
+            otherUser: otherUser ? {
+              id: otherUser.id,
+              username: otherUser.username,
+              fullName: otherUser.fullName,
+              profileImage: otherUser.profileImage,
+              role: otherUser.role,
+              isOnline: otherUser.isOnline
+            } : null
+          };
+        })
+      );
+      
+      res.json(conversationsWithDetails);
     } catch (error) {
-      res.status(500).json({ message: "Failed to fetch messages" });
+      console.error("Error fetching conversations:", error);
+      res.status(500).json({ message: "Failed to fetch conversations" });
     }
   });
-
-  app.post("/api/messages", async (req, res) => {
-    if (!req.isAuthenticated()) {
-      return res.status(401).json({ message: "Not authenticated" });
-    }
-
-    try {
-      const messageData = req.body;
-
-      const message = await storage.createMessage({
-        senderId: req.user.id,
-        receiverId: messageData.receiverId,
-        content: messageData.content,
-        isPaid: messageData.isPaid || false,
-        price: messageData.price || null
-      });
-
-      res.status(201).json(message);
-    } catch (error) {
-      res.status(500).json({ message: "Failed to send message" });
-    }
-  });
-
-  app.patch("/api/messages/:id/read", async (req, res) => {
-    if (!req.isAuthenticated()) {
-      return res.status(401).json({ message: "Not authenticated" });
-    }
-
+  
+  app.get("/api/conversations/:id", authenticate, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) {
-        return res.status(400).json({ message: "Invalid message ID" });
+        return res.status(400).json({ message: "Invalid conversation ID" });
       }
-
-      const updatedMessage = await storage.markMessageAsRead(id);
-      if (!updatedMessage) {
-        return res.status(404).json({ message: "Message not found" });
+      
+      const conversation = await storage.getConversation(id);
+      if (!conversation) {
+        return res.status(404).json({ message: "Conversation not found" });
       }
-
-      res.json(updatedMessage);
+      
+      // Security check - only participants can view the conversation
+      if (conversation.user1Id !== req.user.id && conversation.user2Id !== req.user.id) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      
+      // Get the other user in the conversation
+      const otherUserId = conversation.user1Id === req.user.id 
+        ? conversation.user2Id 
+        : conversation.user1Id;
+      
+      const otherUser = await storage.getUser(otherUserId);
+      
+      const conversationWithUser = {
+        ...conversation,
+        otherUser: otherUser ? {
+          id: otherUser.id,
+          username: otherUser.username,
+          fullName: otherUser.fullName,
+          profileImage: otherUser.profileImage,
+          role: otherUser.role,
+          isOnline: otherUser.isOnline
+        } : null
+      };
+      
+      res.json(conversationWithUser);
     } catch (error) {
-      res.status(500).json({ message: "Failed to mark message as read" });
+      console.error("Error fetching conversation:", error);
+      res.status(500).json({ message: "Failed to fetch conversation" });
     }
   });
-
-  app.get("/api/messages/unread/count", async (req, res) => {
-    if (!req.isAuthenticated()) {
-      return res.status(401).json({ message: "Not authenticated" });
+  
+  app.post("/api/conversations", authenticate, async (req, res) => {
+    try {
+      const { otherUserId } = req.body;
+      const userId = req.user.id;
+      
+      if (!otherUserId) {
+        return res.status(400).json({ message: "Other user ID is required" });
+      }
+      
+      // Check if users are valid
+      const otherUser = await storage.getUser(otherUserId);
+      if (!otherUser) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      
+      // Check if conversation already exists
+      const existingConversation = await storage.getConversationByUsers(userId, otherUserId);
+      if (existingConversation) {
+        return res.json(existingConversation);
+      }
+      
+      // Create new conversation
+      const newConversation = await storage.createConversation({
+        user1Id: userId,
+        user2Id: otherUserId
+      });
+      
+      res.status(201).json(newConversation);
+    } catch (error) {
+      console.error("Error creating conversation:", error);
+      res.status(500).json({ message: "Failed to create conversation" });
     }
-
+  });
+  
+  // Messages endpoints
+  app.get("/api/conversations/:id/messages", authenticate, async (req, res) => {
+    try {
+      const conversationId = parseInt(req.params.id);
+      if (isNaN(conversationId)) {
+        return res.status(400).json({ message: "Invalid conversation ID" });
+      }
+      
+      // Verify the conversation exists and user is a participant
+      const conversation = await storage.getConversation(conversationId);
+      if (!conversation) {
+        return res.status(404).json({ message: "Conversation not found" });
+      }
+      
+      // Security check - only participants can access messages
+      if (conversation.user1Id !== req.user.id && conversation.user2Id !== req.user.id) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      
+      const messages = await storage.getMessagesByConversation(conversationId);
+      
+      // Mark messages as read if the user is the recipient
+      const unreadMessages = messages.filter(
+        message => message.recipientId === req.user.id && !message.isRead
+      );
+      
+      if (unreadMessages.length > 0) {
+        await Promise.all(
+          unreadMessages.map(message => 
+            storage.markMessageAsRead(message.id)
+          )
+        );
+      }
+      
+      res.json(messages);
+    } catch (error) {
+      console.error("Error fetching messages:", error);
+      res.status(500).json({ message: "Failed to fetch messages" });
+    }
+  });
+  
+  app.post("/api/conversations/:id/messages", authenticate, async (req, res) => {
+    try {
+      const conversationId = parseInt(req.params.id);
+      if (isNaN(conversationId)) {
+        return res.status(400).json({ message: "Invalid conversation ID" });
+      }
+      
+      // Verify the conversation exists and user is a participant
+      const conversation = await storage.getConversation(conversationId);
+      if (!conversation) {
+        return res.status(404).json({ message: "Conversation not found" });
+      }
+      
+      // Security check - only participants can send messages
+      if (conversation.user1Id !== req.user.id && conversation.user2Id !== req.user.id) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      
+      const { content } = req.body;
+      if (!content || content.trim() === '') {
+        return res.status(400).json({ message: "Message content is required" });
+      }
+      
+      // Determine the recipient (the other user in the conversation)
+      const recipientId = conversation.user1Id === req.user.id 
+        ? conversation.user2Id 
+        : conversation.user1Id;
+      
+      const message = await storage.createMessage({
+        conversationId,
+        senderId: req.user.id,
+        recipientId,
+        content
+      });
+      
+      // Update the conversation's lastMessageAt timestamp
+      await storage.updateConversation(conversationId, {
+        lastMessageAt: new Date()
+      } as any);
+      
+      // TODO: Emit a socket.io event for real-time notifications
+      
+      res.status(201).json(message);
+    } catch (error) {
+      console.error("Error creating message:", error);
+      res.status(500).json({ message: "Failed to send message" });
+    }
+  });
+  
+  app.get("/api/messages/unread-count", authenticate, async (req, res) => {
     try {
       const count = await storage.getUnreadMessageCount(req.user.id);
       res.json({ count });
     } catch (error) {
-      res.status(500).json({ message: "Failed to get unread message count" });
+      console.error("Error fetching unread message count:", error);
+      res.status(500).json({ message: "Failed to fetch unread message count" });
     }
   });
+  
+  app.patch("/api/messages/:id/read", authenticate, async (req, res) => {
+    try {
+      const messageId = parseInt(req.params.id);
+      if (isNaN(messageId)) {
+        return res.status(400).json({ message: "Invalid message ID" });
+      }
+      
+      // Verify message exists
+      const message = await storage.getMessage(messageId);
+      if (!message) {
+        return res.status(404).json({ message: "Message not found" });
+      }
+      
+      // Security check - only recipient can mark as read
+      if (message.recipientId !== req.user.id) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      
+      const updatedMessage = await storage.markMessageAsRead(messageId);
+      res.json(updatedMessage);
+    } catch (error) {
+      console.error("Error marking message as read:", error);
+      res.status(500).json({ message: "Failed to mark message as read" });
+    }
+  });
+
+  // The unread count endpoint is already defined above as /api/messages/unread-count
 
   // On-demand reading endpoints (pay per minute)
 
