@@ -1,48 +1,56 @@
 import express, { Request, Response, NextFunction } from 'express';
-import * as mongodb from '../mongodb';
-import { log } from '../server-only';
+import mongoose from 'mongoose';
 import slugify from 'slugify';
+import { ForumCategory, ForumThread, ForumPost, User } from '../mongodb';
 
 const router = express.Router();
 
 // Authentication middleware
 const authenticate = (req: Request, res: Response, next: NextFunction) => {
-  if (!req.isAuthenticated || !req.isAuthenticated()) {
-    return res.status(401).json({ error: 'Authentication required' });
+  if (!req.isAuthenticated()) {
+    return res.status(401).json({ message: 'You must be logged in to perform this action' });
   }
   next();
 };
 
 // Admin-only middleware
 const adminOnly = (req: Request, res: Response, next: NextFunction) => {
-  if (!req.user || req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Admin access required' });
+  if (!req.isAuthenticated() || req.user.role !== 'admin') {
+    return res.status(403).json({ message: 'Admin access required' });
   }
   next();
 };
 
-// Helper function to generate unique slugs
+// Helper function to generate a unique slug
 async function generateUniqueSlug(title: string, model: any, existingId?: string): Promise<string> {
-  let slug = slugify(title, { lower: true, strict: true });
+  let slug = slugify(title, {
+    lower: true,
+    strict: true,
+    trim: true
+  });
+  
+  // Check if this slug already exists
   let isUnique = false;
-  let counter = 1;
-
+  let counter = 0;
+  let uniqueSlug = slug;
+  
   while (!isUnique) {
+    // If we're updating a document, exclude the current document from the check
     const query = existingId 
-      ? { slug, _id: { $ne: existingId } }
-      : { slug };
+      ? { slug: uniqueSlug, _id: { $ne: existingId } }
+      : { slug: uniqueSlug };
     
-    const existing = await model.findOne(query);
+    const exists = await model.findOne(query);
     
-    if (!existing) {
+    if (!exists) {
       isUnique = true;
     } else {
-      slug = `${slugify(title, { lower: true, strict: true })}-${counter}`;
       counter++;
+      uniqueSlug = `${slug}-${counter}`;
     }
   }
-
-  return slug;
+  
+  return uniqueSlug;
 }
 
 /**
@@ -50,14 +58,28 @@ async function generateUniqueSlug(title: string, model: any, existingId?: string
  */
 router.get('/categories', async (req: Request, res: Response) => {
   try {
-    const categories = await mongodb.ForumCategory.find({ isActive: true })
-      .sort({ order: 1 })
+    const categories = await ForumCategory.find()
+      .sort({ order: 1, name: 1 })
       .lean();
     
-    return res.status(200).json(categories);
-  } catch (error: any) {
-    log(`Error fetching forum categories: ${error.message}`, 'error');
-    return res.status(500).json({ error: 'Failed to fetch forum categories', details: error.message });
+    // Count threads in each category
+    const categoriesWithCounts = await Promise.all(categories.map(async (category) => {
+      const threadCount = await ForumThread.countDocuments({ categoryId: category._id });
+      
+      return {
+        id: category._id.toString(),
+        name: category.name,
+        slug: category.slug,
+        description: category.description,
+        order: category.order,
+        threadCount
+      };
+    }));
+    
+    res.json(categoriesWithCounts);
+  } catch (error) {
+    console.error('Error fetching categories:', error);
+    res.status(500).json({ message: 'Failed to fetch categories' });
   }
 });
 
@@ -67,50 +89,65 @@ router.get('/categories', async (req: Request, res: Response) => {
 router.get('/categories/:slug', async (req: Request, res: Response) => {
   try {
     const { slug } = req.params;
-    const category = await mongodb.ForumCategory.findOne({ slug }).lean();
+    const category = await ForumCategory.findOne({ slug }).lean();
     
     if (!category) {
-      return res.status(404).json({ error: 'Forum category not found' });
+      return res.status(404).json({ message: 'Category not found' });
     }
     
-    // Get threads for this category, sorted by last activity
-    const threads = await mongodb.ForumThread.find({ categoryId: category._id })
-      .sort({ isStickied: -1, lastPostAt: -1 })
+    // Get threads in this category
+    const threads = await ForumThread.find({ categoryId: category._id })
+      .sort({ isPinned: -1, lastActivity: -1 })
       .limit(20)
       .lean();
     
-    // Get user information for thread creators and last posters
-    const userIds = new Set<string>();
-    
-    threads.forEach(thread => {
-      userIds.add(thread.userId.toString());
-      if (thread.lastPostUserId) {
-        userIds.add(thread.lastPostUserId.toString());
+    // Enhance threads with user info and post counts
+    const threadsWithDetails = await Promise.all(threads.map(async (thread) => {
+      // Get author info
+      const author = await User.findById(thread.userId).lean();
+      
+      // Get last poster info if different from author
+      let lastPoster = null;
+      if (thread.lastPostUserId && thread.lastPostUserId.toString() !== thread.userId.toString()) {
+        lastPoster = await User.findById(thread.lastPostUserId).lean();
       }
-    });
-    
-    const users = await mongodb.User.find({ _id: { $in: Array.from(userIds) } })
-      .select('_id username profileImage fullName')
-      .lean();
-    
-    const usersMap = users.reduce((map, user) => {
-      map[user._id.toString()] = user;
-      return map;
-    }, {} as Record<string, any>);
-    
-    const threadsWithUsers = threads.map(thread => ({
-      ...thread,
-      author: usersMap[thread.userId.toString()],
-      lastPoster: thread.lastPostUserId ? usersMap[thread.lastPostUserId.toString()] : null
+      
+      // Count posts in thread
+      const postCount = await ForumPost.countDocuments({ threadId: thread._id });
+      
+      return {
+        id: thread._id.toString(),
+        title: thread.title,
+        slug: thread.slug,
+        createdAt: thread.createdAt,
+        lastActivity: thread.lastActivity,
+        isPinned: thread.isPinned,
+        isLocked: thread.isLocked,
+        views: thread.views,
+        author: author ? {
+          id: author._id.toString(),
+          username: author.username,
+          profileImage: author.profileImage
+        } : null,
+        lastPoster: lastPoster ? {
+          id: lastPoster._id.toString(),
+          username: lastPoster.username,
+          profileImage: lastPoster.profileImage
+        } : null,
+        postCount
+      };
     }));
     
-    return res.status(200).json({
-      category,
-      threads: threadsWithUsers
+    res.json({
+      id: category._id.toString(),
+      name: category.name,
+      slug: category.slug,
+      description: category.description,
+      threads: threadsWithDetails
     });
-  } catch (error: any) {
-    log(`Error fetching forum category: ${error.message}`, 'error');
-    return res.status(500).json({ error: 'Failed to fetch forum category', details: error.message });
+  } catch (error) {
+    console.error('Error fetching category:', error);
+    res.status(500).json({ message: 'Failed to fetch category' });
   }
 });
 
@@ -119,29 +156,35 @@ router.get('/categories/:slug', async (req: Request, res: Response) => {
  */
 router.post('/categories', authenticate, adminOnly, async (req: Request, res: Response) => {
   try {
-    const { name, description, icon, order } = req.body;
+    const { name, description, order } = req.body;
     
-    if (!name || !description) {
-      return res.status(400).json({ error: 'Name and description are required' });
+    if (!name) {
+      return res.status(400).json({ message: 'Category name is required' });
     }
     
-    const slug = await generateUniqueSlug(name, mongodb.ForumCategory);
+    // Generate a unique slug
+    const slug = await generateUniqueSlug(name, ForumCategory);
     
-    const category = await mongodb.ForumCategory.create({
+    const category = new ForumCategory({
       name,
-      description,
       slug,
-      icon,
+      description: description || '',
       order: order || 0,
-      isActive: true,
-      createdAt: new Date(),
-      updatedAt: new Date()
+      createdAt: new Date()
     });
     
-    return res.status(201).json(category);
-  } catch (error: any) {
-    log(`Error creating forum category: ${error.message}`, 'error');
-    return res.status(500).json({ error: 'Failed to create forum category', details: error.message });
+    await category.save();
+    
+    res.status(201).json({
+      id: category._id.toString(),
+      name: category.name,
+      slug: category.slug,
+      description: category.description,
+      order: category.order
+    });
+  } catch (error) {
+    console.error('Error creating category:', error);
+    res.status(500).json({ message: 'Failed to create category' });
   }
 });
 
@@ -151,38 +194,40 @@ router.post('/categories', authenticate, adminOnly, async (req: Request, res: Re
 router.put('/categories/:id', authenticate, adminOnly, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const { name, description, icon, order, isActive } = req.body;
+    const { name, description, order } = req.body;
     
-    const category = await mongodb.ForumCategory.findById(id);
+    const category = await ForumCategory.findById(id);
     
     if (!category) {
-      return res.status(404).json({ error: 'Forum category not found' });
+      return res.status(404).json({ message: 'Category not found' });
     }
     
-    // Only regenerate slug if name changed
-    let slug = category.slug;
+    // Generate a new slug only if name changed
     if (name && name !== category.name) {
-      slug = await generateUniqueSlug(name, mongodb.ForumCategory, id);
+      category.slug = await generateUniqueSlug(name, ForumCategory, id);
+      category.name = name;
     }
     
-    const updatedCategory = await mongodb.ForumCategory.findByIdAndUpdate(
-      id,
-      {
-        name: name || category.name,
-        description: description || category.description,
-        slug,
-        icon: icon !== undefined ? icon : category.icon,
-        order: order !== undefined ? order : category.order,
-        isActive: isActive !== undefined ? isActive : category.isActive,
-        updatedAt: new Date()
-      },
-      { new: true }
-    );
+    if (description !== undefined) {
+      category.description = description;
+    }
     
-    return res.status(200).json(updatedCategory);
-  } catch (error: any) {
-    log(`Error updating forum category: ${error.message}`, 'error');
-    return res.status(500).json({ error: 'Failed to update forum category', details: error.message });
+    if (order !== undefined) {
+      category.order = order;
+    }
+    
+    await category.save();
+    
+    res.json({
+      id: category._id.toString(),
+      name: category.name,
+      slug: category.slug,
+      description: category.description,
+      order: category.order
+    });
+  } catch (error) {
+    console.error('Error updating category:', error);
+    res.status(500).json({ message: 'Failed to update category' });
   }
 });
 
@@ -193,26 +238,28 @@ router.delete('/categories/:id', authenticate, adminOnly, async (req: Request, r
   try {
     const { id } = req.params;
     
+    const category = await ForumCategory.findById(id);
+    
+    if (!category) {
+      return res.status(404).json({ message: 'Category not found' });
+    }
+    
     // Check if there are threads in this category
-    const threadCount = await mongodb.ForumThread.countDocuments({ categoryId: id });
+    const threadCount = await ForumThread.countDocuments({ categoryId: id });
     
     if (threadCount > 0) {
       return res.status(400).json({ 
-        error: 'Cannot delete category with existing threads', 
-        threadCount 
+        message: 'Cannot delete category with existing threads. Move or delete the threads first.',
+        threadCount
       });
     }
     
-    const category = await mongodb.ForumCategory.findByIdAndDelete(id);
+    await category.deleteOne();
     
-    if (!category) {
-      return res.status(404).json({ error: 'Forum category not found' });
-    }
-    
-    return res.status(200).json({ success: true, message: 'Category deleted successfully' });
-  } catch (error: any) {
-    log(`Error deleting forum category: ${error.message}`, 'error');
-    return res.status(500).json({ error: 'Failed to delete forum category', details: error.message });
+    res.json({ message: 'Category deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting category:', error);
+    res.status(500).json({ message: 'Failed to delete category' });
   }
 });
 
@@ -222,79 +269,81 @@ router.delete('/categories/:id', authenticate, adminOnly, async (req: Request, r
 router.get('/threads/:slug', async (req: Request, res: Response) => {
   try {
     const { slug } = req.params;
-    const page = parseInt(req.query.page as string) || 1;
-    const perPage = parseInt(req.query.perPage as string) || 20;
-    
-    const thread = await mongodb.ForumThread.findOne({ slug }).lean();
+    const thread = await ForumThread.findOne({ slug }).lean();
     
     if (!thread) {
-      return res.status(404).json({ error: 'Thread not found' });
+      return res.status(404).json({ message: 'Thread not found' });
     }
     
     // Increment view count
-    await mongodb.ForumThread.updateOne(
+    await ForumThread.updateOne(
       { _id: thread._id },
-      { $inc: { viewCount: 1 } }
+      { $inc: { views: 1 } }
     );
     
-    // Get the category for this thread
-    const category = await mongodb.ForumCategory.findById(thread.categoryId).lean();
+    // Get the category
+    const category = await ForumCategory.findById(thread.categoryId).lean();
     
-    // Get posts for this thread with pagination
-    const totalPosts = await mongodb.ForumPost.countDocuments({ threadId: thread._id });
-    const totalPages = Math.ceil(totalPosts / perPage);
+    // Get the author
+    const author = await User.findById(thread.userId).lean();
     
-    const posts = await mongodb.ForumPost.find({ threadId: thread._id })
+    // Get posts in this thread
+    const posts = await ForumPost.find({ threadId: thread._id })
       .sort({ createdAt: 1 })
-      .skip((page - 1) * perPage)
-      .limit(perPage)
       .lean();
     
-    // Get all user IDs mentioned in the thread and posts
-    const userIds = new Set<string>();
+    // Get info for all post authors in one batch
+    const userIds = new Set(posts.map(post => post.userId.toString()));
     userIds.add(thread.userId.toString());
     
-    if (thread.lastPostUserId) {
-      userIds.add(thread.lastPostUserId.toString());
-    }
+    const users = await User.find({ _id: { $in: Array.from(userIds) } }).lean();
+    const userMap = new Map(users.map(user => [user._id.toString(), user]));
     
-    posts.forEach(post => {
-      userIds.add(post.userId.toString());
+    // Enhance posts with author info
+    const enhancedPosts = posts.map(post => {
+      const user = userMap.get(post.userId.toString());
+      
+      return {
+        id: post._id.toString(),
+        content: post.content,
+        createdAt: post.createdAt,
+        updatedAt: post.updatedAt,
+        author: user ? {
+          id: user._id.toString(),
+          username: user.username,
+          profileImage: user.profileImage,
+          role: user.role
+        } : null,
+        likes: post.likes || 0,
+        isEdited: post.createdAt.getTime() !== post.updatedAt.getTime()
+      };
     });
     
-    // Fetch user information
-    const users = await mongodb.User.find({ _id: { $in: Array.from(userIds) } })
-      .select('_id username profileImage fullName role createdAt')
-      .lean();
-    
-    const usersMap = users.reduce((map, user) => {
-      map[user._id.toString()] = user;
-      return map;
-    }, {} as Record<string, any>);
-    
-    // Attach user information to each post
-    const postsWithUsers = posts.map(post => ({
-      ...post,
-      user: usersMap[post.userId.toString()]
-    }));
-    
-    return res.status(200).json({
-      thread: {
-        ...thread,
-        author: usersMap[thread.userId.toString()]
-      },
-      category,
-      posts: postsWithUsers,
-      pagination: {
-        page,
-        perPage,
-        totalPosts,
-        totalPages
-      }
+    res.json({
+      id: thread._id.toString(),
+      title: thread.title,
+      slug: thread.slug,
+      createdAt: thread.createdAt,
+      lastActivity: thread.lastActivity,
+      isPinned: thread.isPinned,
+      isLocked: thread.isLocked,
+      views: thread.views + 1, // Include the view we just added
+      category: category ? {
+        id: category._id.toString(),
+        name: category.name,
+        slug: category.slug
+      } : null,
+      author: author ? {
+        id: author._id.toString(),
+        username: author.username,
+        profileImage: author.profileImage,
+        role: author.role
+      } : null,
+      posts: enhancedPosts
     });
-  } catch (error: any) {
-    log(`Error fetching thread: ${error.message}`, 'error');
-    return res.status(500).json({ error: 'Failed to fetch thread', details: error.message });
+  } catch (error) {
+    console.error('Error fetching thread:', error);
+    res.status(500).json({ message: 'Failed to fetch thread' });
   }
 });
 
@@ -303,55 +352,79 @@ router.get('/threads/:slug', async (req: Request, res: Response) => {
  */
 router.post('/threads', authenticate, async (req: Request, res: Response) => {
   try {
-    if (!req.user) {
-      return res.status(401).json({ error: 'User not authenticated' });
+    const { categoryId, title, content } = req.body;
+    
+    if (!categoryId || !title || !content) {
+      return res.status(400).json({ message: 'Category, title and content are required' });
     }
     
-    const { title, content, categoryId, tags } = req.body;
-    
-    if (!title || !content || !categoryId) {
-      return res.status(400).json({ error: 'Title, content and categoryId are required' });
-    }
-    
-    // Verify category exists
-    const category = await mongodb.ForumCategory.findById(categoryId);
+    // Validate category exists
+    const category = await ForumCategory.findById(categoryId);
     if (!category) {
-      return res.status(404).json({ error: 'Forum category not found' });
+      return res.status(404).json({ message: 'Category not found' });
     }
     
-    const slug = await generateUniqueSlug(title, mongodb.ForumThread);
+    // Generate a unique slug
+    const slug = await generateUniqueSlug(title, ForumThread);
     
-    const thread = await mongodb.ForumThread.create({
+    // Create the thread
+    const now = new Date();
+    const thread = new ForumThread({
+      categoryId,
+      userId: req.user.id,
       title,
       slug,
-      content, // The first post's content is also stored with the thread for SEO/preview
-      userId: req.user.id,
-      categoryId,
-      isStickied: false,
+      isPinned: false,
       isLocked: false,
-      viewCount: 0,
-      lastPostAt: new Date(),
-      lastPostUserId: req.user.id,
-      tags: tags || [],
-      createdAt: new Date(),
-      updatedAt: new Date()
+      views: 0,
+      createdAt: now,
+      lastActivity: now,
+      lastPostUserId: req.user.id
     });
     
-    // Also create the initial post in this thread
-    const post = await mongodb.ForumPost.create({
+    await thread.save();
+    
+    // Create the first post in the thread
+    const post = new ForumPost({
       threadId: thread._id,
       userId: req.user.id,
       content,
-      isEdited: false,
-      likes: [],
-      createdAt: new Date(),
-      updatedAt: new Date()
+      createdAt: now,
+      updatedAt: now,
+      likes: 0
     });
     
-    return res.status(201).json({ thread, post });
-  } catch (error: any) {
-    log(`Error creating thread: ${error.message}`, 'error');
-    return res.status(500).json({ error: 'Failed to create thread', details: error.message });
+    await post.save();
+    
+    // Get the user for response
+    const user = await User.findById(req.user.id).lean();
+    
+    res.status(201).json({
+      thread: {
+        id: thread._id.toString(),
+        title: thread.title,
+        slug: thread.slug,
+        createdAt: thread.createdAt,
+        category: {
+          id: category._id.toString(),
+          name: category.name,
+          slug: category.slug
+        },
+        author: {
+          id: user._id.toString(),
+          username: user.username,
+          profileImage: user.profileImage
+        }
+      },
+      post: {
+        id: post._id.toString(),
+        content: post.content,
+        createdAt: post.createdAt
+      }
+    });
+  } catch (error) {
+    console.error('Error creating thread:', error);
+    res.status(500).json({ message: 'Failed to create thread' });
   }
 });
 
@@ -360,78 +433,59 @@ router.post('/threads', authenticate, async (req: Request, res: Response) => {
  */
 router.put('/threads/:id', authenticate, async (req: Request, res: Response) => {
   try {
-    if (!req.user) {
-      return res.status(401).json({ error: 'User not authenticated' });
-    }
-    
     const { id } = req.params;
-    const { title, content, tags, isStickied, isLocked } = req.body;
+    const { title, isPinned, isLocked, categoryId } = req.body;
     
-    const thread = await mongodb.ForumThread.findById(id);
+    const thread = await ForumThread.findById(id);
     
     if (!thread) {
-      return res.status(404).json({ error: 'Thread not found' });
+      return res.status(404).json({ message: 'Thread not found' });
     }
     
-    // Check permission - only thread author or admin can update
-    const isAuthor = thread.userId.toString() === req.user.id;
-    const isAdmin = req.user.role === 'admin';
-    
-    if (!isAuthor && !isAdmin) {
-      return res.status(403).json({ error: 'You do not have permission to update this thread' });
+    // Check authorization (author or admin)
+    if (thread.userId.toString() !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Not authorized to update this thread' });
     }
     
-    // Regular users can only update title, content and tags
-    // Admins can additionally update isStickied and isLocked
-    const updates: any = { updatedAt: new Date() };
+    // Update fields
+    if (title && title !== thread.title) {
+      thread.title = title;
+      thread.slug = await generateUniqueSlug(title, ForumThread, id);
+    }
     
-    if (title && (isAuthor || isAdmin)) {
-      updates.title = title;
+    // Only admins can pin, lock, or move threads
+    if (req.user.role === 'admin') {
+      if (isPinned !== undefined) {
+        thread.isPinned = isPinned;
+      }
       
-      // Update slug if title changed
-      if (title !== thread.title) {
-        updates.slug = await generateUniqueSlug(title, mongodb.ForumThread, id);
+      if (isLocked !== undefined) {
+        thread.isLocked = isLocked;
+      }
+      
+      if (categoryId) {
+        // Verify category exists
+        const categoryExists = await ForumCategory.exists({ _id: categoryId });
+        if (!categoryExists) {
+          return res.status(404).json({ message: 'Target category not found' });
+        }
+        thread.categoryId = categoryId;
       }
     }
     
-    if (content && (isAuthor || isAdmin)) {
-      updates.content = content;
-      
-      // Also update the first post's content
-      const firstPost = await mongodb.ForumPost.findOne({ threadId: id }).sort({ createdAt: 1 });
-      if (firstPost) {
-        await mongodb.ForumPost.updateOne(
-          { _id: firstPost._id },
-          { 
-            content,
-            isEdited: true,
-            editedAt: new Date(),
-            updatedAt: new Date()
-          }
-        );
-      }
-    }
+    await thread.save();
     
-    if (tags && (isAuthor || isAdmin)) {
-      updates.tags = tags;
-    }
-    
-    // Admin-only updates
-    if (isAdmin) {
-      if (isStickied !== undefined) updates.isStickied = isStickied;
-      if (isLocked !== undefined) updates.isLocked = isLocked;
-    }
-    
-    const updatedThread = await mongodb.ForumThread.findByIdAndUpdate(
-      id,
-      updates,
-      { new: true }
-    );
-    
-    return res.status(200).json(updatedThread);
-  } catch (error: any) {
-    log(`Error updating thread: ${error.message}`, 'error');
-    return res.status(500).json({ error: 'Failed to update thread', details: error.message });
+    res.json({
+      id: thread._id.toString(),
+      title: thread.title,
+      slug: thread.slug,
+      isPinned: thread.isPinned,
+      isLocked: thread.isLocked,
+      categoryId: thread.categoryId.toString()
+    });
+  } catch (error) {
+    console.error('Error updating thread:', error);
+    res.status(500).json({ message: 'Failed to update thread' });
   }
 });
 
@@ -440,36 +494,29 @@ router.put('/threads/:id', authenticate, async (req: Request, res: Response) => 
  */
 router.delete('/threads/:id', authenticate, async (req: Request, res: Response) => {
   try {
-    if (!req.user) {
-      return res.status(401).json({ error: 'User not authenticated' });
-    }
-    
     const { id } = req.params;
     
-    const thread = await mongodb.ForumThread.findById(id);
+    const thread = await ForumThread.findById(id);
     
     if (!thread) {
-      return res.status(404).json({ error: 'Thread not found' });
+      return res.status(404).json({ message: 'Thread not found' });
     }
     
-    // Check permission - only thread author or admin can delete
-    const isAuthor = thread.userId.toString() === req.user.id;
-    const isAdmin = req.user.role === 'admin';
-    
-    if (!isAuthor && !isAdmin) {
-      return res.status(403).json({ error: 'You do not have permission to delete this thread' });
+    // Check authorization (author or admin)
+    if (thread.userId.toString() !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Not authorized to delete this thread' });
     }
     
-    // Delete all posts in this thread
-    await mongodb.ForumPost.deleteMany({ threadId: id });
+    // Delete the thread and all its posts
+    await Promise.all([
+      thread.deleteOne(),
+      ForumPost.deleteMany({ threadId: id })
+    ]);
     
-    // Delete the thread
-    await mongodb.ForumThread.findByIdAndDelete(id);
-    
-    return res.status(200).json({ success: true, message: 'Thread and all associated posts deleted successfully' });
-  } catch (error: any) {
-    log(`Error deleting thread: ${error.message}`, 'error');
-    return res.status(500).json({ error: 'Failed to delete thread', details: error.message });
+    res.json({ message: 'Thread and its posts deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting thread:', error);
+    res.status(500).json({ message: 'Failed to delete thread' });
   }
 });
 
@@ -478,58 +525,59 @@ router.delete('/threads/:id', authenticate, async (req: Request, res: Response) 
  */
 router.post('/posts', authenticate, async (req: Request, res: Response) => {
   try {
-    if (!req.user) {
-      return res.status(401).json({ error: 'User not authenticated' });
-    }
-    
     const { threadId, content } = req.body;
     
     if (!threadId || !content) {
-      return res.status(400).json({ error: 'ThreadId and content are required' });
+      return res.status(400).json({ message: 'Thread ID and content are required' });
     }
     
-    // Verify thread exists and is not locked
-    const thread = await mongodb.ForumThread.findById(threadId);
-    
+    // Validate thread exists and is not locked
+    const thread = await ForumThread.findById(threadId);
     if (!thread) {
-      return res.status(404).json({ error: 'Thread not found' });
+      return res.status(404).json({ message: 'Thread not found' });
     }
     
-    if (thread.isLocked) {
-      return res.status(403).json({ error: 'This thread is locked and cannot receive new replies' });
+    if (thread.isLocked && req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Thread is locked' });
     }
     
-    const post = await mongodb.ForumPost.create({
+    // Create the post
+    const now = new Date();
+    const post = new ForumPost({
       threadId,
       userId: req.user.id,
       content,
-      isEdited: false,
-      likes: [],
-      createdAt: new Date(),
-      updatedAt: new Date()
+      createdAt: now,
+      updatedAt: now,
+      likes: 0
     });
     
-    // Update thread's lastPostAt and lastPostUserId
-    await mongodb.ForumThread.updateOne(
-      { _id: threadId },
-      { 
-        lastPostAt: new Date(),
-        lastPostUserId: req.user.id
-      }
-    );
+    await post.save();
     
-    // Get user info for the post
-    const user = await mongodb.User.findById(req.user.id)
-      .select('_id username profileImage fullName role')
-      .lean();
+    // Update the thread's last activity and last poster
+    thread.lastActivity = now;
+    thread.lastPostUserId = req.user.id;
+    await thread.save();
     
-    return res.status(201).json({
-      ...post.toObject(),
-      user
+    // Get the user for response
+    const user = await User.findById(req.user.id).lean();
+    
+    res.status(201).json({
+      id: post._id.toString(),
+      content: post.content,
+      createdAt: post.createdAt,
+      author: {
+        id: user._id.toString(),
+        username: user.username,
+        profileImage: user.profileImage,
+        role: user.role
+      },
+      likes: 0,
+      isEdited: false
     });
-  } catch (error: any) {
-    log(`Error creating post: ${error.message}`, 'error');
-    return res.status(500).json({ error: 'Failed to create post', details: error.message });
+  } catch (error) {
+    console.error('Error creating post:', error);
+    res.status(500).json({ message: 'Failed to create post' });
   }
 });
 
@@ -538,65 +586,46 @@ router.post('/posts', authenticate, async (req: Request, res: Response) => {
  */
 router.put('/posts/:id', authenticate, async (req: Request, res: Response) => {
   try {
-    if (!req.user) {
-      return res.status(401).json({ error: 'User not authenticated' });
-    }
-    
     const { id } = req.params;
     const { content } = req.body;
     
     if (!content) {
-      return res.status(400).json({ error: 'Content is required' });
+      return res.status(400).json({ message: 'Content is required' });
     }
     
-    const post = await mongodb.ForumPost.findById(id);
+    const post = await ForumPost.findById(id);
     
     if (!post) {
-      return res.status(404).json({ error: 'Post not found' });
+      return res.status(404).json({ message: 'Post not found' });
     }
     
-    // Check permission - only post author or admin can update
-    const isAuthor = post.userId.toString() === req.user.id;
-    const isAdmin = req.user.role === 'admin';
-    
-    if (!isAuthor && !isAdmin) {
-      return res.status(403).json({ error: 'You do not have permission to update this post' });
+    // Check authorization (author or admin)
+    if (post.userId.toString() !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Not authorized to update this post' });
     }
     
-    const updatedPost = await mongodb.ForumPost.findByIdAndUpdate(
-      id,
-      {
-        content,
-        isEdited: true,
-        editedAt: new Date(),
-        updatedAt: new Date()
-      },
-      { new: true }
-    );
-    
-    // If this is the first post in the thread, update thread content too
-    const thread = await mongodb.ForumThread.findById(post.threadId);
-    const firstPost = await mongodb.ForumPost.findOne({ threadId: post.threadId }).sort({ createdAt: 1 });
-    
-    if (thread && firstPost && firstPost._id.toString() === id) {
-      await mongodb.ForumThread.updateOne(
-        { _id: post.threadId },
-        { content }
-      );
+    // Check if the thread is locked
+    const thread = await ForumThread.findById(post.threadId);
+    if (thread && thread.isLocked && req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Thread is locked' });
     }
     
-    // Get user info for the post
-    const user = await mongodb.User.findById(post.userId)
-      .select('_id username profileImage fullName role')
-      .lean();
+    // Update the post
+    post.content = content;
+    post.updatedAt = new Date();
     
-    return res.status(200).json({
-      ...updatedPost?.toObject(),
-      user
+    await post.save();
+    
+    res.json({
+      id: post._id.toString(),
+      content: post.content,
+      createdAt: post.createdAt,
+      updatedAt: post.updatedAt,
+      isEdited: post.createdAt.getTime() !== post.updatedAt.getTime()
     });
-  } catch (error: any) {
-    log(`Error updating post: ${error.message}`, 'error');
-    return res.status(500).json({ error: 'Failed to update post', details: error.message });
+  } catch (error) {
+    console.error('Error updating post:', error);
+    res.status(500).json({ message: 'Failed to update post' });
   }
 });
 
@@ -605,61 +634,54 @@ router.put('/posts/:id', authenticate, async (req: Request, res: Response) => {
  */
 router.delete('/posts/:id', authenticate, async (req: Request, res: Response) => {
   try {
-    if (!req.user) {
-      return res.status(401).json({ error: 'User not authenticated' });
-    }
-    
     const { id } = req.params;
     
-    const post = await mongodb.ForumPost.findById(id);
+    const post = await ForumPost.findById(id);
     
     if (!post) {
-      return res.status(404).json({ error: 'Post not found' });
+      return res.status(404).json({ message: 'Post not found' });
     }
     
-    // Check permission - only post author or admin can delete
-    const isAuthor = post.userId.toString() === req.user.id;
-    const isAdmin = req.user.role === 'admin';
-    
-    if (!isAuthor && !isAdmin) {
-      return res.status(403).json({ error: 'You do not have permission to delete this post' });
+    // Check authorization (author or admin)
+    if (post.userId.toString() !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Not authorized to delete this post' });
     }
     
     // Check if this is the only post in the thread
-    const postCount = await mongodb.ForumPost.countDocuments({ threadId: post.threadId });
+    const postCount = await ForumPost.countDocuments({ threadId: post.threadId });
     
     if (postCount === 1) {
-      // If this is the only post, delete the thread too
-      await mongodb.ForumThread.deleteOne({ _id: post.threadId });
-    } else {
-      // Update thread's lastPostAt and lastPostUserId to the latest remaining post
-      const latestPost = await mongodb.ForumPost.findOne({ threadId: post.threadId, _id: { $ne: id } })
-        .sort({ createdAt: -1 });
-        
-      if (latestPost) {
-        await mongodb.ForumThread.updateOne(
-          { _id: post.threadId },
-          { 
-            lastPostAt: latestPost.createdAt,
-            lastPostUserId: latestPost.userId
-          }
-        );
-      }
+      return res.status(400).json({ 
+        message: 'Cannot delete the only post in a thread. Delete the thread instead.' 
+      });
+    }
+    
+    // Check if the thread is locked
+    const thread = await ForumThread.findById(post.threadId);
+    if (thread && thread.isLocked && req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Thread is locked' });
     }
     
     // Delete the post
-    await mongodb.ForumPost.deleteOne({ _id: id });
+    await post.deleteOne();
     
-    return res.status(200).json({ 
-      success: true, 
-      message: postCount === 1 
-        ? 'Post and associated thread deleted successfully' 
-        : 'Post deleted successfully',
-      threadDeleted: postCount === 1
-    });
-  } catch (error: any) {
-    log(`Error deleting post: ${error.message}`, 'error');
-    return res.status(500).json({ error: 'Failed to delete post', details: error.message });
+    // If this was the most recent post, update the thread's last activity
+    if (thread && thread.lastPostUserId.toString() === post.userId.toString()) {
+      // Find the new most recent post
+      const lastPost = await ForumPost.findOne({ threadId: thread._id })
+        .sort({ createdAt: -1 });
+      
+      if (lastPost) {
+        thread.lastActivity = lastPost.createdAt;
+        thread.lastPostUserId = lastPost.userId;
+        await thread.save();
+      }
+    }
+    
+    res.json({ message: 'Post deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting post:', error);
+    res.status(500).json({ message: 'Failed to delete post' });
   }
 });
 
@@ -668,50 +690,25 @@ router.delete('/posts/:id', authenticate, async (req: Request, res: Response) =>
  */
 router.post('/posts/:id/like', authenticate, async (req: Request, res: Response) => {
   try {
-    if (!req.user) {
-      return res.status(401).json({ error: 'User not authenticated' });
-    }
-    
     const { id } = req.params;
     
-    const post = await mongodb.ForumPost.findById(id);
+    const post = await ForumPost.findById(id);
     
     if (!post) {
-      return res.status(404).json({ error: 'Post not found' });
+      return res.status(404).json({ message: 'Post not found' });
     }
     
-    const userId = req.user.id;
-    const userIdObj = userId;
+    // Increment likes (in a real app, you'd track who liked what)
+    post.likes = (post.likes || 0) + 1;
+    await post.save();
     
-    // Check if user already liked this post
-    const alreadyLiked = post.likes.some(id => id.toString() === userId);
-    
-    let updatedPost;
-    
-    if (alreadyLiked) {
-      // Remove like
-      updatedPost = await mongodb.ForumPost.findByIdAndUpdate(
-        id,
-        { $pull: { likes: userIdObj } },
-        { new: true }
-      );
-    } else {
-      // Add like
-      updatedPost = await mongodb.ForumPost.findByIdAndUpdate(
-        id,
-        { $addToSet: { likes: userIdObj } },
-        { new: true }
-      );
-    }
-    
-    return res.status(200).json({ 
-      success: true,
-      action: alreadyLiked ? 'unliked' : 'liked',
-      likes: updatedPost?.likes.length || 0
+    res.json({
+      id: post._id.toString(),
+      likes: post.likes
     });
-  } catch (error: any) {
-    log(`Error liking/unliking post: ${error.message}`, 'error');
-    return res.status(500).json({ error: 'Failed to process like action', details: error.message });
+  } catch (error) {
+    console.error('Error liking post:', error);
+    res.status(500).json({ message: 'Failed to like post' });
   }
 });
 
@@ -721,76 +718,96 @@ router.post('/posts/:id/like', authenticate, async (req: Request, res: Response)
 router.get('/search', async (req: Request, res: Response) => {
   try {
     const { query, category } = req.query;
-    const page = parseInt(req.query.page as string) || 1;
-    const perPage = parseInt(req.query.perPage as string) || 20;
     
     if (!query) {
-      return res.status(400).json({ error: 'Search query is required' });
+      return res.status(400).json({ message: 'Search query is required' });
     }
     
-    const searchFilter: any = {
+    // Build search conditions
+    const conditions: any = {
       $or: [
-        { title: { $regex: query, $options: 'i' } },
-        { content: { $regex: query, $options: 'i' } },
-        { tags: { $in: [query] } }
+        { title: { $regex: query, $options: 'i' } }
       ]
     };
     
     // Add category filter if provided
     if (category) {
-      searchFilter.categoryId = category;
+      const categoryDoc = await ForumCategory.findOne({ slug: category });
+      if (categoryDoc) {
+        conditions.categoryId = categoryDoc._id;
+      }
     }
     
-    // Count total results
-    const totalThreads = await mongodb.ForumThread.countDocuments(searchFilter);
-    const totalPages = Math.ceil(totalThreads / perPage);
-    
-    // Fetch threads
-    const threads = await mongodb.ForumThread.find(searchFilter)
-      .sort({ lastPostAt: -1 })
-      .skip((page - 1) * perPage)
-      .limit(perPage)
+    // Search for threads matching the conditions
+    const threads = await ForumThread.find(conditions)
+      .sort({ lastActivity: -1 })
+      .limit(20)
       .lean();
     
-    // Get category info for each thread
-    const categoryIds = threads.map(thread => thread.categoryId);
-    const categories = await mongodb.ForumCategory.find({ _id: { $in: categoryIds } }).lean();
-    
-    const categoriesMap = categories.reduce((map, category) => {
-      map[category._id.toString()] = category;
-      return map;
-    }, {} as Record<string, any>);
-    
-    // Get user info for thread authors
-    const userIds = threads.map(thread => thread.userId);
-    const users = await mongodb.User.find({ _id: { $in: userIds } })
-      .select('_id username profileImage fullName')
+    // Also search in post content
+    const postContentQuery = { content: { $regex: query, $options: 'i' } };
+    const posts = await ForumPost.find(postContentQuery)
+      .sort({ createdAt: -1 })
+      .limit(50)
       .lean();
     
-    const usersMap = users.reduce((map, user) => {
-      map[user._id.toString()] = user;
-      return map;
-    }, {} as Record<string, any>);
+    // Get unique thread IDs from the posts
+    const threadIdsFromPosts = [...new Set(posts.map(post => post.threadId.toString()))];
     
-    // Build result with thread, category, and author info
-    const results = threads.map(thread => ({
-      ...thread,
-      category: categoriesMap[thread.categoryId.toString()],
-      author: usersMap[thread.userId.toString()]
-    }));
+    // Get those threads if they weren't already found
+    const additionalThreads = await ForumThread.find({
+      _id: { $in: threadIdsFromPosts },
+      _id: { $nin: threads.map(t => t._id) }
+    })
+    .sort({ lastActivity: -1 })
+    .limit(20)
+    .lean();
     
-    return res.status(200).json({
-      results,
-      pagination: {
-        page,
-        perPage,
-        totalThreads,
-        totalPages
-      }
+    // Combine and get user info
+    const allThreads = [...threads, ...additionalThreads];
+    const userIds = allThreads.map(thread => thread.userId);
+    const users = await User.find({ _id: { $in: userIds } }).lean();
+    const userMap = new Map(users.map(user => [user._id.toString(), user]));
+    
+    // Get category info
+    const categoryIds = allThreads.map(thread => thread.categoryId);
+    const categories = await ForumCategory.find({ _id: { $in: categoryIds } }).lean();
+    const categoryMap = new Map(categories.map(category => [category._id.toString(), category]));
+    
+    // Format the results
+    const formattedThreads = allThreads.map(thread => {
+      const user = userMap.get(thread.userId.toString());
+      const category = categoryMap.get(thread.categoryId.toString());
+      
+      return {
+        id: thread._id.toString(),
+        title: thread.title,
+        slug: thread.slug,
+        createdAt: thread.createdAt,
+        lastActivity: thread.lastActivity,
+        views: thread.views,
+        author: user ? {
+          id: user._id.toString(),
+          username: user.username,
+          profileImage: user.profileImage
+        } : null,
+        category: category ? {
+          id: category._id.toString(),
+          name: category.name,
+          slug: category.slug
+        } : null
+      };
     });
-  } catch (error: any) {
-    log(`Error searching threads: ${error.message}`, 'error');
-    return res.status(500).json({ error: 'Failed to search threads', details: error.message });
+    
+    res.json({
+      query: query,
+      category: category,
+      results: formattedThreads,
+      total: formattedThreads.length
+    });
+  } catch (error) {
+    console.error('Error searching forum:', error);
+    res.status(500).json({ message: 'Failed to search forum' });
   }
 });
 
@@ -799,54 +816,61 @@ router.get('/search', async (req: Request, res: Response) => {
  */
 router.get('/recent-activity', async (req: Request, res: Response) => {
   try {
-    const limit = parseInt(req.query.limit as string) || 10;
-    
-    // Get most recently active threads
-    const threads = await mongodb.ForumThread.find()
-      .sort({ lastPostAt: -1 })
-      .limit(limit)
+    // Get recent threads
+    const recentThreads = await ForumThread.find()
+      .sort({ lastActivity: -1 })
+      .limit(10)
       .lean();
-    
-    // Get category info
-    const categoryIds = threads.map(thread => thread.categoryId);
-    const categories = await mongodb.ForumCategory.find({ _id: { $in: categoryIds } }).lean();
-    
-    const categoriesMap = categories.reduce((map, category) => {
-      map[category._id.toString()] = category;
-      return map;
-    }, {} as Record<string, any>);
     
     // Get user info
-    const userIds = new Set<string>();
+    const userIds = recentThreads.map(thread => thread.userId);
+    userIds.push(...recentThreads.map(thread => thread.lastPostUserId));
     
-    threads.forEach(thread => {
-      userIds.add(thread.userId.toString());
-      if (thread.lastPostUserId) {
-        userIds.add(thread.lastPostUserId.toString());
-      }
+    const uniqueUserIds = [...new Set(userIds.map(id => id.toString()))];
+    const users = await User.find({ _id: { $in: uniqueUserIds } }).lean();
+    const userMap = new Map(users.map(user => [user._id.toString(), user]));
+    
+    // Get category info
+    const categoryIds = recentThreads.map(thread => thread.categoryId);
+    const categories = await ForumCategory.find({ _id: { $in: categoryIds } }).lean();
+    const categoryMap = new Map(categories.map(category => [category._id.toString(), category]));
+    
+    // Format the results
+    const formattedActivity = recentThreads.map(thread => {
+      const author = userMap.get(thread.userId.toString());
+      const lastPoster = userMap.get(thread.lastPostUserId.toString());
+      const category = categoryMap.get(thread.categoryId.toString());
+      
+      return {
+        type: 'thread',
+        id: thread._id.toString(),
+        title: thread.title,
+        slug: thread.slug,
+        createdAt: thread.createdAt,
+        lastActivity: thread.lastActivity,
+        views: thread.views,
+        author: author ? {
+          id: author._id.toString(),
+          username: author.username,
+          profileImage: author.profileImage
+        } : null,
+        lastPoster: lastPoster ? {
+          id: lastPoster._id.toString(),
+          username: lastPoster.username,
+          profileImage: lastPoster.profileImage
+        } : null,
+        category: category ? {
+          id: category._id.toString(),
+          name: category.name,
+          slug: category.slug
+        } : null
+      };
     });
     
-    const users = await mongodb.User.find({ _id: { $in: Array.from(userIds) } })
-      .select('_id username profileImage fullName')
-      .lean();
-    
-    const usersMap = users.reduce((map, user) => {
-      map[user._id.toString()] = user;
-      return map;
-    }, {} as Record<string, any>);
-    
-    // Format response
-    const formattedThreads = threads.map(thread => ({
-      ...thread,
-      category: categoriesMap[thread.categoryId.toString()],
-      author: usersMap[thread.userId.toString()],
-      lastPoster: thread.lastPostUserId ? usersMap[thread.lastPostUserId.toString()] : null
-    }));
-    
-    return res.status(200).json(formattedThreads);
-  } catch (error: any) {
-    log(`Error fetching recent forum activity: ${error.message}`, 'error');
-    return res.status(500).json({ error: 'Failed to fetch recent activity', details: error.message });
+    res.json(formattedActivity);
+  } catch (error) {
+    console.error('Error fetching recent activity:', error);
+    res.status(500).json({ message: 'Failed to fetch recent activity' });
   }
 });
 

@@ -8,6 +8,7 @@ import sessionsRoutes from "./routes/sessions";
 import payPerMinuteRoutes from "./routes/pay-per-minute";
 import shopRoutes from "./routes/shop";
 import readerBalancesRoutes from "./routes/reader-balances";
+import forumRoutes from "./routes/forum";
 import cors from "cors";
 
 // Load environment variables
@@ -114,6 +115,9 @@ app.use((req, res, next) => {
   
   // Register reader balances routes
   app.use('/api/reader-balances', readerBalancesRoutes);
+  
+  // Register forum routes
+  app.use('/api/forum', forumRoutes);
   
   const server = await registerRoutes(app);
   
