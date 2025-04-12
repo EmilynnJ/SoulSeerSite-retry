@@ -12,21 +12,21 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', {
 
 export class ShopStripeService {
   /**
-   * Synchronize a MongoDB product with Stripe
+   * Synchronize a PostgreSQL product with Stripe
    * 
-   * This creates or updates a product in Stripe based on the MongoDB product data
+   * This creates or updates a product in Stripe based on the PostgreSQL product data
    */
-  async syncProductWithStripe(productId: string): Promise<void> {
+  async syncProductWithStripe(productId: number): Promise<void> {
     try {
-      // Get product details from MongoDB
-      const product = await mongodb.Product.findById(productId);
+      // Get product details from PostgreSQL
+      const product = await storage.getProduct(productId);
       
       if (!product) {
         throw new Error(`Product not found with ID: ${productId}`);
       }
       
-      // Format the price in cents for Stripe
-      const priceInCents = Math.round(product.price * 100);
+      // Format the price in cents for Stripe (price is already stored in cents in PostgreSQL)
+      const priceInCents = Math.round(product.price);
       
       let stripeProduct: Stripe.Product;
       let stripePrice: Stripe.Price;
@@ -36,12 +36,12 @@ export class ShopStripeService {
         // Update existing product
         stripeProduct = await stripe.products.update(product.stripeProductId, {
           name: product.name,
-          description: product.description,
+          description: product.description || '',
           active: true,
           images: product.imageUrl ? [product.imageUrl] : undefined,
           metadata: {
-            mongoDbId: product._id.toString(),
-            category: product.category,
+            postgresId: product.id.toString(),
+            category: product.category || 'Miscellaneous',
           },
         });
         
@@ -60,8 +60,9 @@ export class ShopStripeService {
             });
             
             // Update the product with the new price ID
-            product.stripePriceId = stripePrice.id;
-            await product.save();
+            await storage.updateProduct(product.id, {
+              stripePriceId: stripePrice.id
+            });
           }
         } else {
           // No price associated, create one
@@ -73,19 +74,20 @@ export class ShopStripeService {
           });
           
           // Update the product with the new price ID
-          product.stripePriceId = stripePrice.id;
-          await product.save();
+          await storage.updateProduct(product.id, {
+            stripePriceId: stripePrice.id
+          });
         }
       } else {
         // Create new product in Stripe
         stripeProduct = await stripe.products.create({
           name: product.name,
-          description: product.description,
+          description: product.description || '',
           active: true,
           images: product.imageUrl ? [product.imageUrl] : undefined,
           metadata: {
-            mongoDbId: product._id.toString(),
-            category: product.category,
+            postgresId: product.id.toString(),
+            category: product.category || 'Miscellaneous',
           },
         });
         
@@ -97,10 +99,11 @@ export class ShopStripeService {
           active: true,
         });
         
-        // Update the MongoDB product with Stripe IDs
-        product.stripeProductId = stripeProduct.id;
-        product.stripePriceId = stripePrice.id;
-        await product.save();
+        // Update the PostgreSQL product with Stripe IDs
+        await storage.updateProduct(product.id, {
+          stripeProductId: stripeProduct.id,
+          stripePriceId: stripePrice.id
+        });
       }
       
       log(`Successfully synchronized product ${product.name} with Stripe`, 'shop-stripe');
@@ -111,26 +114,26 @@ export class ShopStripeService {
   }
   
   /**
-   * Synchronize all MongoDB products with Stripe
+   * Synchronize all PostgreSQL products with Stripe
    * 
-   * This creates or updates all products in Stripe based on the MongoDB data
+   * This creates or updates all products in Stripe based on the PostgreSQL data
    */
   async syncAllProductsWithStripe(): Promise<void> {
     try {
-      // Get all products from MongoDB
-      const products = await mongodb.Product.find();
+      // Get all products from PostgreSQL
+      const productList = await storage.getProducts();
       
-      if (products.length === 0) {
+      if (productList.length === 0) {
         log('No products found to synchronize with Stripe', 'shop-stripe');
         return;
       }
       
       // Sync each product
-      for (const product of products) {
-        await this.syncProductWithStripe(product._id.toString());
+      for (const product of productList) {
+        await this.syncProductWithStripe(product.id);
       }
       
-      log(`Successfully synchronized ${products.length} products with Stripe`, 'shop-stripe');
+      log(`Successfully synchronized ${productList.length} products with Stripe`, 'shop-stripe');
     } catch (error: any) {
       log(`Error synchronizing all products with Stripe: ${error.message}`, 'shop-stripe-error');
       throw error;
@@ -235,22 +238,22 @@ export class ShopStripeService {
   /**
    * Create a checkout session for a product
    * 
-   * @param productId MongoDB product ID
+   * @param productId PostgreSQL product ID
    * @param userId User ID making the purchase
    * @param quantity Quantity to purchase
    * @param successUrl Success URL for redirect after checkout
    * @param cancelUrl Cancel URL for redirect if checkout is canceled
    */
   async createCheckoutSession(
-    productId: string,
-    userId: string,
+    productId: number,
+    userId: number,
     quantity: number = 1,
     successUrl: string,
     cancelUrl: string
   ): Promise<string> {
     try {
-      // Get product details from MongoDB
-      const product = await mongodb.Product.findById(productId);
+      // Get product details from PostgreSQL
+      const product = await storage.getProduct(productId);
       
       if (!product) {
         throw new Error(`Product not found with ID: ${productId}`);
@@ -261,7 +264,7 @@ export class ShopStripeService {
         await this.syncProductWithStripe(productId);
         
         // Reload the product to get the updated Stripe IDs
-        const updatedProduct = await mongodb.Product.findById(productId);
+        const updatedProduct = await storage.getProduct(productId);
         if (!updatedProduct || !updatedProduct.stripePriceId) {
           throw new Error('Failed to synchronize product with Stripe');
         }
@@ -280,10 +283,10 @@ export class ShopStripeService {
         mode: 'payment',
         success_url: successUrl,
         cancel_url: cancelUrl,
-        client_reference_id: userId,
+        client_reference_id: userId.toString(),
         metadata: {
-          productId: productId,
-          userId: userId,
+          productId: productId.toString(),
+          userId: userId.toString(),
         },
       });
       
@@ -315,31 +318,44 @@ export class ShopStripeService {
       
       const { productId, userId } = session.metadata;
       
-      // Create an order in MongoDB
-      const order = await mongodb.Order.create({
-        userId: userId,
-        productId: productId,
+      // Convert string IDs to numbers
+      const productIdNum = parseInt(productId, 10);
+      const userIdNum = parseInt(userId, 10);
+      
+      // Get the total amount in cents and convert to the format needed for our database
+      const totalAmount = session.amount_total ? session.amount_total : 0;
+      
+      // Create an order in PostgreSQL
+      const order = await storage.createOrder({
+        userId: userIdNum,
         status: 'completed',
-        totalAmount: session.amount_total ? session.amount_total / 100 : 0,
+        totalAmount: totalAmount,
         stripeSessionId: session.id,
         stripePaymentIntentId: session.payment_intent as string,
-        items: [{
-          productId: productId,
-          quantity: 1,
-          price: session.amount_total ? session.amount_total / 100 : 0,
-        }],
         createdAt: new Date(),
-        updatedAt: new Date(),
+        updatedAt: new Date()
+      });
+      
+      // Create order item for the product
+      await storage.createOrderItem({
+        orderId: order.id,
+        productId: productIdNum,
+        quantity: 1,
+        price: totalAmount,
+        name: '', // This will be filled by joining with product data
+        imageUrl: '' // This will be filled by joining with product data
       });
       
       // Update product inventory if needed
-      const product = await mongodb.Product.findById(productId);
+      const product = await storage.getProduct(productIdNum);
       if (product && typeof product.inventory === 'number') {
-        product.inventory = Math.max(0, product.inventory - 1);
-        await product.save();
+        const newInventory = Math.max(0, product.inventory - 1);
+        await storage.updateProduct(product.id, {
+          inventory: newInventory
+        });
       }
       
-      log(`Successfully processed checkout for order: ${order._id}`, 'shop-stripe');
+      log(`Successfully processed checkout for order: ${order.id}`, 'shop-stripe');
     } catch (error: any) {
       log(`Error processing checkout completion: ${error.message}`, 'shop-stripe-error');
       throw error;

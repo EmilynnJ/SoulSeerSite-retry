@@ -10,6 +10,7 @@ import shopRoutes from "./routes/shop";
 import readerBalancesRoutes from "./routes/reader-balances";
 import forumRoutes from "./routes/forum";
 import cors from "cors";
+// MongoDB connection is no longer used - migrated to PostgreSQL
 
 // Load environment variables
 config();

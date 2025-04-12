@@ -5,113 +5,29 @@ import { MongoMemoryServer } from 'mongodb-memory-server';
 // Additional connection options
 mongoose.set('strictQuery', false); // For deprecation warning
 
-// MongoDB connection string with credentials from environment variable
+// DEPRECATED: MongoDB connection is no longer used as we've migrated to PostgreSQL
+// This file is kept for reference and backward compatibility
 let MONGODB_URI = '';
 
-// Use MONGODB_PASSWORD environment variable if available
-if (process.env.MONGODB_PASSWORD) {
-  // Connection string for MongoDB Atlas with parameters to handle connection issues
-  MONGODB_URI = `mongodb+srv://emilynnjj:${process.env.MONGODB_PASSWORD}@cluster0.q84zjg1.mongodb.net/SoulSeer?retryWrites=true&w=majority&appName=Cluster0`;
-  log(`Using MongoDB Atlas with password from environment variables`, 'database');
-} else {
-  // Fallback connection string 
-  MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://emilynnjj:QsFLZ4L4DJSQYSP9@cluster0.q84zjg1.mongodb.net/SoulSeer?retryWrites=true&w=majority&appName=Cluster0';
-  log(`Using MongoDB connection from MONGODB_URI or fallback`, 'database');
-}
+// Disable MongoDB Atlas connection - system now uses PostgreSQL
+log(`MongoDB connection is disabled - using PostgreSQL database`, 'database');
 
 // In-memory MongoDB server for development
 let mongoMemoryServer: MongoMemoryServer | null = null;
 
-// Create database connection - FORCE MongoDB Atlas ONLY
+// DEPRECATED: MongoDB connection function - now a no-op since we've migrated to PostgreSQL
 export async function connectToDatabase() {
-  try {
-    if (mongoose.connection.readyState !== 1) {
-      log('Connecting to MongoDB Atlas (FORCED)...', 'database');
-      
-      // ONLY use MongoDB Atlas - no fallback
-      const uri = MONGODB_URI;
-      if (!uri) {
-        throw new Error('MONGODB_URI is not defined');
-      }
-      
-      log(`Attempting MongoDB Atlas connection...`, 'database');
-      
-      // Get more details about the connection issues
-      const startTime = Date.now();
-      try {
-        // Connect to MongoDB Atlas with refined connection parameters
-        // Improved for dynamic IP handling and whitelist issues
-        await mongoose.connect(uri, {
-          socketTimeoutMS: 45000,         // Longer timeout for socket operations
-          connectTimeoutMS: 45000,        // Longer timeout for initial connection
-          serverSelectionTimeoutMS: 45000, // Longer timeout for server selection
-          family: 4,                      // Force IPv4 (helps with Replit connectivity) 
-          maxPoolSize: 3,                 // Reduced pool size for Replit environment
-          retryWrites: true,              // Retry write operations
-          retryReads: true,               // Retry read operations
-          // Removed problematic parameters
-          // NO bufferCommands: false - too strict and causes timeouts
-          // NO maxTimeMS: 10000 - too short for operations
-          autoIndex: false,               // Don't build indexes to prevent timeout
-          minPoolSize: 1,                 // Minimum connection pool size
-          heartbeatFrequencyMS: 30000     // Heartbeat to prevent idle disconnects
-        });
-        
-        log(`MongoDB Atlas connection successful in ${Date.now() - startTime}ms`, 'database');
-      } catch (connectionError: any) {
-        log(`MongoDB Atlas connection error details: ${JSON.stringify({
-          name: connectionError.name,
-          message: connectionError.message,
-          code: connectionError.code,
-          codeName: connectionError.codeName,
-          connectionTime: Date.now() - startTime
-        })}`, 'database');
-        
-        // Re-throw the error - NO FALLBACK
-        throw new Error(`Failed to connect to MongoDB Atlas. Make sure your connection string and network settings are correct: ${connectionError.message}`);
-      }
-      
-      // Set up connection event handlers
-      mongoose.connection.on('error', (err) => {
-        log(`MongoDB connection error: ${err}`, 'database');
-      });
-      
-      mongoose.connection.on('disconnected', () => {
-        log('MongoDB disconnected, attempting to reconnect...', 'database');
-      });
-      
-      mongoose.connection.on('connected', () => {
-        log('MongoDB connected event fired', 'database');
-      });
-      
-      log('MongoDB connection established successfully', 'database');
-      
-      // Seed sample data in in-memory database if needed
-      if (process.env.MONGODB_SEED_SAMPLE_DATA === 'true') {
-        await seedSampleData();
-      }
+  // This function is kept for backward compatibility but doesn't actually connect to MongoDB
+  log('MongoDB connection function called but not connecting - using PostgreSQL instead', 'database');
+  
+  // Return a mock connection object to prevent errors in code that expects a connection
+  return {
+    readyState: 1,  // Pretend we're connected
+    on: () => {},   // No-op event handler
+    db: {
+      collection: () => ({ countDocuments: async () => 0 })  // Mock collection methods
     }
-    return mongoose.connection;
-  } catch (error) {
-    log(`Error connecting to MongoDB: ${error}`, 'database');
-    
-    // Retry with exponential backoff (for production connections)
-    if (process.env.MONGODB_URI && process.env.NODE_ENV === 'production') {
-      log('Will retry connection in 5 seconds...', 'database');
-      return new Promise((resolve, reject) => {
-        setTimeout(async () => {
-          try {
-            const connection = await connectToDatabase();
-            resolve(connection);
-          } catch (retryError) {
-            reject(retryError);
-          }
-        }, 5000);
-      });
-    }
-    
-    throw error;
-  }
+  } as any;
 }
 
 // Sample data seeding for development
