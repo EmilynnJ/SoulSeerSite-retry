@@ -4,8 +4,8 @@
 import bcrypt from 'bcrypt';
 import { MongoClient, ServerApiVersion } from 'mongodb';
 
-// Connection string to MongoDB Atlas
-const uri = "mongodb+srv://emilynnjj:QsFLZ4L4DJSQYSP9@ssretry3.y7soq.mongodb.net/?retryWrites=true&w=majority&appName=SSRETRY3";
+// Connection string to MongoDB Atlas - FIXED DATABASE CONNECTION
+const uri = "mongodb+srv://emilynnjj:QsFLZ4L4DJSQYSP9@cluster0.q84zjg1.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0";
 // Create a MongoClient with a MongoClientOptions object
 const client = new MongoClient(uri, {
   serverApi: {

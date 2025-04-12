@@ -10,11 +10,11 @@ let MONGODB_URI = '';
 
 // Use MONGODB_PASSWORD environment variable if available
 if (process.env.MONGODB_PASSWORD) {
-  MONGODB_URI = `mongodb+srv://emilynnjj:${process.env.MONGODB_PASSWORD}@ssretry3.y7soq.mongodb.net/?retryWrites=true&w=majority&appName=SSRETRY3`;
+  MONGODB_URI = `mongodb+srv://emilynnjj:${process.env.MONGODB_PASSWORD}@cluster0.q84zjg1.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
   log(`Using MongoDB connection with password from environment variables`, 'database');
 } else {
   // Fallback to original connection string
-  MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://emilynnjj:QsFLZ4L4DJSQYSP9@cluster0.npldm3y.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';
+  MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://emilynnjj:QsFLZ4L4DJSQYSP9@cluster0.q84zjg1.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';
   log(`Using MongoDB connection from MONGODB_URI or fallback`, 'database');
 }
 
