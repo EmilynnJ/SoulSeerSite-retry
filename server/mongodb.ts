@@ -338,11 +338,45 @@ const userSchema = new mongoose.Schema({
   role: { type: String, enum: ['admin', 'user', 'reader', 'client'], default: 'user' },
   profileImage: String,
   bio: String,
+  
+  // Account status
   isVerified: { type: Boolean, default: false },
   isOnline: { type: Boolean, default: false },
+  isAvailable: { type: Boolean, default: false }, // For readers to mark themselves as available for readings
+  
+  // Payment information
   stripeCustomerId: String,
   stripeConnectId: String,
+  
+  // Reader-specific fields
+  specialties: [String], // Array of reader specialties, e.g., ['Tarot', 'Astrology', 'Channeling']
+  yearsOfExperience: Number,
+  rating: { type: Number, min: 0, max: 5, default: 0 }, // Average rating from all readings
+  reviewCount: { type: Number, default: 0 }, // Number of reviews received
+  
+  // Reader pricing (in cents)
+  pricingVideo: { type: Number, default: 0 }, // per minute rate for video readings
+  pricingVoice: { type: Number, default: 0 }, // per minute rate for voice readings
+  pricingChat: { type: Number, default: 0 }, // per minute rate for chat readings
+  minimumSessionLength: { type: Number, default: 5 }, // Minimum session length in minutes
+  
+  // Reader statistics
+  completedReadings: { type: Number, default: 0 }, // Number of completed readings
+  totalReadingMinutes: { type: Number, default: 0 }, // Total minutes spent on readings
+  
+  // User preferences & settings
   preferences: { type: Map, of: mongoose.Schema.Types.Mixed },
+  notificationSettings: {
+    email: { type: Boolean, default: true },
+    push: { type: Boolean, default: true },
+    sms: { type: Boolean, default: false }
+  },
+  
+  // Account balance (for quick reference, detailed balance in ReaderBalance/ClientBalance)
+  accountBalance: { type: Number, default: 0 }, // Current account balance in cents
+  
+  // Timestamps
+  lastActive: { type: Date },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 }, { timestamps: true });
