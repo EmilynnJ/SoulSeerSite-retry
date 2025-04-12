@@ -116,7 +116,7 @@ app.use((req, res, next) => {
   
   // Initialize the Chat service with the HTTP server
   try {
-    const { chatService } = await import('./services/chat-service2');
+    const { chatService } = await import('./services/chat-service-socketio');
     chatService.initialize(server);
     console.log('Chat service initialized successfully');
   } catch (error) {

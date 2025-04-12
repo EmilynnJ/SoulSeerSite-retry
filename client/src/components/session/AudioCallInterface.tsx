@@ -1,385 +1,345 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { FiMic, FiMicOff, FiPhoneOff, FiPhone, FiVolume2, FiVolumeX, FiAlertCircle } from 'react-icons/fi';
+import { ZegoExpressEngine } from 'zego-express-engine-webrtc';
+import { useNavigate } from 'wouter';
 import { 
   Card, 
   CardContent, 
+  CardHeader,
+  CardTitle,
+  CardDescription,
   CardFooter
 } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Loader2, Mic, MicOff, Phone, PhoneOff, Volume, Volume2, VolumeX } from 'lucide-react';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import {
+  Avatar,
+  AvatarFallback,
+  AvatarImage,
+} from '@/components/ui/avatar';
+import { Badge } from '@/components/ui/badge';
+import { Separator } from '@/components/ui/separator';
+import { toast } from '@/hooks/use-toast';
 import { Progress } from '@/components/ui/progress';
+import { SessionTimer } from './SessionTimer';
+import { cn } from '@/lib/utils';
+import apiRequest from '@/lib/apiRequest';
 
 interface AudioCallInterfaceProps {
   sessionId: string;
-  roomId: string;
+  userId: string;
+  userName: string;
+  userAvatar?: string;
+  isReader: boolean;
+  readerId: string;
   readerName: string;
   readerAvatar?: string;
-  onEndCall?: () => void;
+  onEndSession: () => void;
+  onError?: (error: string) => void;
 }
 
 export const AudioCallInterface: React.FC<AudioCallInterfaceProps> = ({
   sessionId,
-  roomId,
+  userId,
+  userName,
+  userAvatar,
+  isReader,
+  readerId,
   readerName,
   readerAvatar,
-  onEndCall
+  onEndSession,
+  onError
 }) => {
-  const [isLoading, setIsLoading] = useState(true);
+  const [zegoEngine, setZegoEngine] = useState<ZegoExpressEngine | null>(null);
+  const [roomId, setRoomId] = useState<string>(`audio_${sessionId}`);
+  const [isConnecting, setIsConnecting] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [isSpeakerOn, setIsSpeakerOn] = useState(true);
+  const [connectionStatus, setConnectionStatus] = useState<string>('disconnected');
   const [error, setError] = useState<string | null>(null);
   const [audioLevel, setAudioLevel] = useState(0);
-  const [callDuration, setCallDuration] = useState(0);
-  
-  // Reference to hold ZegoCloud instance
-  const zegoRef = useRef<any>(null);
-  // AudioContext for audio visualization
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const analyserRef = useRef<AnalyserNode | null>(null);
-  const dataArrayRef = useRef<Uint8Array | null>(null);
-  
-  // Call timer
+  const audioLevelTimerRef = useRef<number | null>(null);
+  const navigate = useNavigate();
+
+  // Initialize the Zego engine and join room
   useEffect(() => {
-    let timer: number | null = null;
+    let engine: ZegoExpressEngine | null = null;
+    let token: string = '';
+    let appID: number = 0;
     
-    if (isConnected) {
-      timer = window.setInterval(() => {
-        setCallDuration(prev => prev + 1);
-      }, 1000);
-    }
-    
-    return () => {
-      if (timer) clearInterval(timer);
-    };
-  }, [isConnected]);
-  
-  // Format call duration as mm:ss
-  const formatDuration = (seconds: number): string => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  };
-  
-  // Initialize ZegoCloud as soon as the component mounts
-  useEffect(() => {
-    const initZego = async () => {
+    const initializeCall = async () => {
       try {
-        setIsLoading(true);
+        setIsConnecting(true);
         setError(null);
         
-        // Check for browser compatibility and audio permissions
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          
-          // Initialize audio analyzer for visualizing audio
-          const audioContext = new AudioContext();
-          const analyser = audioContext.createAnalyser();
-          const microphone = audioContext.createMediaStreamSource(stream);
-          microphone.connect(analyser);
-          analyser.fftSize = 256;
-          const bufferLength = analyser.frequencyBinCount;
-          const dataArray = new Uint8Array(bufferLength);
-          
-          audioContextRef.current = audioContext;
-          analyserRef.current = analyser;
-          dataArrayRef.current = dataArray;
-          
-          // Start audio visualization
-          animateAudio();
-          
-          // Don't stop the stream as we need it for the call
-        } catch (mediaError: any) {
-          console.error('Media permission error:', mediaError);
-          if (mediaError.name === 'NotAllowedError') {
-            throw new Error('Microphone permission denied. Please allow access in your browser settings.');
-          } else if (mediaError.name === 'NotFoundError') {
-            throw new Error('No microphone found. Please connect a device and try again.');
-          } else {
-            throw new Error(`Media device error: ${mediaError.message}`);
-          }
+        // Fetch token from backend
+        const response = await apiRequest(`/api/sessions/token`, {
+          method: 'POST',
+          body: JSON.stringify({
+            sessionId,
+            roomId,
+            userId,
+            userName,
+            type: 'audio'
+          })
+        });
+        
+        if (!response || !response.token) {
+          throw new Error('Failed to obtain token');
         }
         
-        // Load ZegoCloud SDK dynamically
-        const { ZegoExpressEngine } = await import('zego-express-engine-webrtc')
-          .catch(e => {
-            console.error('Failed to load ZegoCloud SDK:', e);
-            throw new Error('Failed to load audio call service. Please check your internet connection.');
-          });
+        token = response.token;
+        appID = response.appID;
         
-        // Create the Zego instance if it doesn't exist
-        if (!zegoRef.current) {
-          console.log('Requesting token for session:', sessionId, 'room:', roomId);
-          
-          // Get the token from the server
-          const tokenResponse = await fetch('/api/sessions/token', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({ sessionId, roomId })
-          });
-          
-          if (!tokenResponse.ok) {
-            const errorData = await tokenResponse.json();
-            console.error('Token response error:', errorData);
-            throw new Error(errorData.error || errorData.details || 'Failed to get authentication token');
+        // Initialize Zego engine
+        engine = new ZegoExpressEngine(appID, response.serverSecret);
+        setZegoEngine(engine);
+        
+        // Register event listeners
+        engine.on('roomStateUpdate', (roomID, state, errorCode, extendedData) => {
+          console.log(`Room state update: ${roomID}, state: ${state}, error: ${errorCode}`);
+          if (state === 'CONNECTED') {
+            setIsConnected(true);
+            setIsConnecting(false);
+            setConnectionStatus('connected');
+          } else if (state === 'DISCONNECTED') {
+            setIsConnected(false);
+            setConnectionStatus('disconnected');
+          } else if (state === 'CONNECTING') {
+            setConnectionStatus('connecting');
           }
           
-          const tokenData = await tokenResponse.json();
-          console.log('Token received successfully');
-          
-          if (!tokenData.success || !tokenData.token) {
-            console.error('Invalid token response:', tokenData);
-            throw new Error('Invalid authentication response from server');
+          if (errorCode !== 0) {
+            setError(`Room connection error: ${errorCode}`);
+            if (onError) onError(`Connection error: ${errorCode}`);
           }
-          
-          const { token, appID, userId, username } = tokenData;
-          
-          // Initialize ZegoCloud
-          console.log(`Initializing ZegoCloud with appID: ${appID}`);
-          zegoRef.current = new ZegoExpressEngine(appID, 'production');
-          
-          // Log into the room with the token
-          console.log(`Logging into room: ${roomId}`);
-          await zegoRef.current.loginRoom(roomId, token, { userID: userId, userName: username })
-            .catch(e => {
-              console.error('Room login error:', e);
-              throw new Error(`Failed to connect to audio room: ${e.message}`);
-            });
-          
-          // Bind events with better error handling
-          zegoRef.current.on('roomStateUpdate', (roomID: string, state: string, errorCode: number) => {
-            console.log(`Room state updated: ${roomID}, state: ${state}, errorCode: ${errorCode}`);
-            setIsConnected(state === 'CONNECTED');
-            
-            if (state === 'CONNECTED') {
-              setIsLoading(false);
-            }
-            
-            if (errorCode !== 0) {
-              console.error(`Room error: ${errorCode}`);
-            }
-          });
-          
-          zegoRef.current.on('roomUserUpdate', (roomID: string, updateType: string, userList: any[]) => {
-            console.log(`User update in room ${roomID}: ${updateType}`, userList);
-            
-            // Show notification when reader joins/leaves
-            if (userList.length > 0) {
-              const userAction = updateType === 'ADD' ? 'joined' : 'left';
-              console.log(`User ${userList[0].userName} has ${userAction} the session`);
-            }
-          });
-          
-          // Publish audio-only stream
-          const streamID = `${roomId}_${userId}`;
-          console.log(`Publishing audio stream: ${streamID}`);
-          await zegoRef.current.startPublishingStream(streamID, {
-            camera: {
-              video: false,
-              audio: true
-            }
-          }).catch(e => {
-            console.error('Publishing error:', e);
-            throw new Error(`Failed to start audio streaming: ${e.message}`);
-          });
-          
-          console.log('ZegoCloud initialized successfully');
-          setIsLoading(false);
-          setIsConnected(true);
-        }
-      } catch (err: any) {
-        console.error('Failed to initialize audio call:', err);
+        });
         
-        // Detailed error information
-        let errorMessage = err.message || 'Failed to initialize the audio call';
+        engine.on('roomStreamUpdate', async (roomID, updateType, streamList, extendedData) => {
+          console.log(`Room stream update: ${roomID}, type: ${updateType}, streams: ${streamList.length}`);
+          
+          if (updateType === 'ADD') {
+            // Play the remote audio stream
+            for (const stream of streamList) {
+              if (stream.user.userID !== userId) {
+                await engine.startPlayingStream(stream.streamID);
+                console.log(`Started playing stream: ${stream.streamID}`);
+              }
+            }
+          }
+        });
         
-        setError(errorMessage);
-        setIsLoading(false);
+        engine.on('roomUserUpdate', (roomID, updateType, userList) => {
+          console.log(`Room user update: ${roomID}, type: ${updateType}, users: ${userList.length}`);
+        });
+        
+        // Join the room
+        await engine.loginRoom(roomId, token, { userID: userId, userName: userName });
+        
+        // Publish local audio stream
+        await engine.startPublishingStream(`${userId}_audio`);
+        
+        // Start monitoring audio levels
+        startAudioLevelMonitoring(engine);
+        
+        console.log('Successfully joined audio room:', roomId);
+      } catch (err) {
+        console.error('Error initializing audio call:', err);
+        setError(`Failed to initialize call: ${err.message}`);
+        setIsConnecting(false);
+        setIsConnected(false);
+        if (onError) onError(err.message);
       }
     };
     
-    // Function to visualize audio levels
-    const animateAudio = () => {
-      if (!analyserRef.current || !dataArrayRef.current) return;
-      
-      const analyser = analyserRef.current;
-      const dataArray = dataArrayRef.current;
-      
-      analyser.getByteFrequencyData(dataArray);
-      
-      // Calculate average volume level from frequency data
-      let sum = 0;
-      for (let i = 0; i < dataArray.length; i++) {
-        sum += dataArray[i];
-      }
-      const average = sum / dataArray.length;
-      
-      // Scale to 0-100 for the progress bar
-      const scaledLevel = Math.min(100, average * 2);
-      setAudioLevel(scaledLevel);
-      
-      // Continue animation loop
-      requestAnimationFrame(animateAudio);
-    };
+    initializeCall();
     
-    // Initialize audio call
-    initZego();
-    
-    // Cleanup function
+    // Cleanup on component unmount
     return () => {
-      if (zegoRef.current) {
-        zegoRef.current.stopPublishingStream();
-        zegoRef.current.logoutRoom(roomId);
-        zegoRef.current = null;
+      if (audioLevelTimerRef.current) {
+        clearInterval(audioLevelTimerRef.current);
       }
       
-      // Close audio context
-      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-        audioContextRef.current.close();
+      if (engine) {
+        engine.stopPublishingStream();
+        engine.logoutRoom(roomId);
+        engine.destroy();
       }
     };
-  }, [sessionId, roomId]);
+  }, [sessionId, userId, userName, roomId]);
+  
+  // Start monitoring audio levels
+  const startAudioLevelMonitoring = (engine: ZegoExpressEngine) => {
+    if (audioLevelTimerRef.current) {
+      clearInterval(audioLevelTimerRef.current);
+    }
+    
+    audioLevelTimerRef.current = window.setInterval(() => {
+      if (engine) {
+        const localLevels = engine.getCapturedSoundLevelList();
+        const remoteLevels = engine.getRemoteSoundLevelList();
+        
+        let maxLevel = 0;
+        
+        // Get local audio level
+        for (const level of Object.values(localLevels)) {
+          if (level > maxLevel) maxLevel = level;
+        }
+        
+        // Get remote audio level
+        for (const level of Object.values(remoteLevels)) {
+          if (level > maxLevel) maxLevel = level;
+        }
+        
+        setAudioLevel(maxLevel * 100); // Convert to percentage
+      }
+    }, 200);
+  };
   
   // Toggle mute
   const toggleMute = () => {
-    if (!zegoRef.current) return;
-    
-    try {
-      if (isMuted) {
-        zegoRef.current.mutePublishStreamAudio(false);
-      } else {
-        zegoRef.current.mutePublishStreamAudio(true);
-      }
+    if (zegoEngine) {
+      zegoEngine.mutePublishStreamAudio(!isMuted);
       setIsMuted(!isMuted);
-    } catch (err) {
-      console.error('Failed to toggle mute:', err);
     }
   };
   
   // Toggle speaker
   const toggleSpeaker = () => {
-    try {
-      // In a real implementation, we would switch audio output devices
-      // For now, we just toggle the state
+    if (zegoEngine) {
+      zegoEngine.setPlayVolume(!isSpeakerOn ? 100 : 0);
       setIsSpeakerOn(!isSpeakerOn);
-    } catch (err) {
-      console.error('Failed to toggle speaker:', err);
     }
   };
   
   // Handle ending the call
-  const handleEndCall = () => {
-    if (zegoRef.current) {
-      zegoRef.current.stopPublishingStream();
-      zegoRef.current.logoutRoom(roomId);
-      zegoRef.current = null;
+  const handleEndCall = async () => {
+    try {
+      if (zegoEngine) {
+        zegoEngine.stopPublishingStream();
+        await zegoEngine.logoutRoom(roomId);
+      }
+    } catch (err) {
+      console.error('Error ending call:', err);
     }
     
-    if (onEndCall) {
-      onEndCall();
-    }
+    onEndSession();
   };
   
-  if (isLoading) {
-    return (
-      <Card className="w-full">
-        <CardContent className="p-6 flex flex-col items-center justify-center min-h-[200px]">
-          <Loader2 className="h-10 w-10 animate-spin text-primary mb-4" />
-          <p className="text-lg font-medium">Connecting to call...</p>
-        </CardContent>
-      </Card>
-    );
-  }
-  
-  if (error) {
-    return (
-      <Card className="w-full border-destructive">
-        <CardContent className="p-6">
-          <Alert variant="destructive" className="mb-4">
-            <AlertTitle>Connection Error</AlertTitle>
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-          <Button onClick={onEndCall} variant="destructive" className="w-full">
-            <PhoneOff className="h-4 w-4 mr-2" /> End Call
-          </Button>
-        </CardContent>
-      </Card>
-    );
-  }
-  
   return (
-    <Card className="w-full">
-      <CardContent className="p-6 flex flex-col items-center">
-        {/* Call Status */}
-        <div className="text-sm text-muted-foreground mb-2">
-          {isConnected ? 'Call in progress' : 'Connecting...'}
+    <Card className="w-full max-w-lg mx-auto shadow-lg">
+      <CardHeader className="bg-primary/5 flex flex-row items-center justify-between space-y-0 pb-3">
+        <div className="flex flex-col space-y-1">
+          <CardTitle className="text-lg font-medium">
+            Audio Call with {isReader ? userId : readerName}
+          </CardTitle>
+          <CardDescription className="text-sm text-muted-foreground">
+            {isConnected ? (
+              <Badge variant="outline" className="bg-green-500/10 text-green-500">
+                Connected
+              </Badge>
+            ) : isConnecting ? (
+              <Badge variant="outline" className="bg-yellow-500/10 text-yellow-500">
+                Connecting...
+              </Badge>
+            ) : (
+              <Badge variant="outline" className="bg-red-500/10 text-red-500">
+                Disconnected
+              </Badge>
+            )}
+          </CardDescription>
         </div>
-        
-        {/* Timer */}
-        <div className="text-xl font-bold mb-6">
-          {formatDuration(callDuration)}
+        <div className="flex items-center space-x-2">
+          <SessionTimer
+            sessionId={sessionId}
+            userId={userId}
+            isReader={isReader}
+            onTimeEnd={handleEndCall}
+            showNotifications={true}
+            className="text-sm"
+            iconSize={14}
+          />
         </div>
+      </CardHeader>
+      <CardContent className="p-6 flex flex-col items-center justify-center space-y-8">
+        {error && (
+          <div className="bg-red-500/10 text-red-500 p-3 text-sm flex items-center space-x-2 w-full rounded-md">
+            <FiAlertCircle className="h-4 w-4" />
+            <span>{error}</span>
+          </div>
+        )}
         
-        {/* Avatar */}
-        <div className="relative mb-6">
-          <Avatar className="h-24 w-24">
-            <AvatarImage src={readerAvatar} alt={readerName} />
-            <AvatarFallback className="text-lg">
-              {readerName.substring(0, 2).toUpperCase()}
+        <div className="relative">
+          <Avatar className="h-32 w-32 border-4 border-primary/20">
+            <AvatarImage 
+              src={isReader ? userAvatar : readerAvatar} 
+              alt={isReader ? userName : readerName} 
+            />
+            <AvatarFallback className="text-4xl">
+              {(isReader ? userName : readerName).substring(0, 2).toUpperCase()}
             </AvatarFallback>
           </Avatar>
           
-          {/* Pulsating ring for active call */}
-          <span className={`absolute inset-0 rounded-full ${isConnected ? 'animate-pulse-ring' : ''}`} />
+          {/* Pulsing ring animation when connected */}
+          {isConnected && (
+            <div className="absolute inset-0 rounded-full">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-20"></span>
+            </div>
+          )}
         </div>
         
-        {/* Name */}
-        <h3 className="text-lg font-medium mb-2">{readerName}</h3>
-        <p className="text-sm text-muted-foreground mb-6">Spiritual Advisor</p>
-        
-        {/* Audio Visualization */}
-        <div className="w-full max-w-xs mb-6">
-          <Progress value={isMuted ? 0 : audioLevel} className="h-2" />
-          <p className="text-xs text-center mt-1 text-muted-foreground">
-            {isMuted ? 'Microphone muted' : 'Audio level'}
+        <div className="text-center">
+          <h3 className="text-xl font-semibold mb-1">
+            {isReader ? userName : readerName}
+          </h3>
+          <p className="text-muted-foreground text-sm">
+            {connectionStatus === 'connected' ? 'Call in progress' : 
+             connectionStatus === 'connecting' ? 'Connecting...' : 'Call ended'}
           </p>
         </div>
-      </CardContent>
-      
-      <CardFooter className="border-t p-4 flex justify-center">
-        <div className="flex gap-4">
-          <Button
-            onClick={toggleMute}
-            variant={isMuted ? "outline" : "secondary"}
-            size="icon"
-            className="h-12 w-12 rounded-full"
-          >
-            {isMuted ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
-          </Button>
-          
-          <Button
-            onClick={handleEndCall}
-            variant="destructive"
-            size="icon"
-            className="h-12 w-12 rounded-full"
-          >
-            <Phone className="h-5 w-5" />
-          </Button>
-          
-          <Button
-            onClick={toggleSpeaker}
-            variant={isSpeakerOn ? "secondary" : "outline"}
-            size="icon"
-            className="h-12 w-12 rounded-full"
-          >
-            {isSpeakerOn ? <Volume2 className="h-5 w-5" /> : <VolumeX className="h-5 w-5" />}
-          </Button>
+        
+        {/* Audio level indicator */}
+        <div className="w-full">
+          <Progress value={audioLevel} className="h-2" />
         </div>
+      </CardContent>
+      <Separator />
+      <CardFooter className="p-4 flex justify-center space-x-4">
+        <Button 
+          variant="outline" 
+          size="icon" 
+          className={cn(
+            "rounded-full h-12 w-12",
+            isMuted ? "bg-red-500/10 text-red-500" : "bg-primary/10"
+          )}
+          onClick={toggleMute}
+          disabled={!isConnected}
+        >
+          {isMuted ? <FiMicOff className="h-5 w-5" /> : <FiMic className="h-5 w-5" />}
+        </Button>
+        
+        <Button 
+          variant="destructive" 
+          size="icon"
+          className="rounded-full h-14 w-14"
+          onClick={handleEndCall}
+        >
+          <FiPhoneOff className="h-6 w-6" />
+        </Button>
+        
+        <Button 
+          variant="outline" 
+          size="icon" 
+          className={cn(
+            "rounded-full h-12 w-12",
+            !isSpeakerOn ? "bg-red-500/10 text-red-500" : "bg-primary/10"
+          )}
+          onClick={toggleSpeaker}
+          disabled={!isConnected}
+        >
+          {isSpeakerOn ? <FiVolume2 className="h-5 w-5" /> : <FiVolumeX className="h-5 w-5" />}
+        </Button>
       </CardFooter>
     </Card>
   );
 };
-
-export default AudioCallInterface;
