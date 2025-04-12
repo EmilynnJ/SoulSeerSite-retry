@@ -25,6 +25,7 @@ import PoliciesPage from "@/pages/policies-page";
 import LivestreamPage from "@/pages/livestream-page";
 import LivestreamDetailPage from "@/pages/livestream-detail-page";
 import PayPerMinuteSession from "@/pages/PayPerMinuteSession";
+import MessagesPage from "@/pages/messages-page";
 import { ProtectedRoute } from "./lib/protected-route";
 import { Layout } from "./components/layout";
 import { PwaInstallBanner } from "@/components/pwa-install-banner";
@@ -34,14 +35,6 @@ import "@/styles/globals.css";
 import env from './lib/env';
 
 // Dashboard page has been moved to its own component file
-
-// Messages component
-const Messages = () => (
-  <div className="container min-h-screen py-8">
-    <h1 className="text-4xl font-alex mb-6">Messages</h1>
-    <p className="font-playfair">Your messages will appear here.</p>
-  </div>
-);
 
 // Help component
 const Help = () => (
@@ -70,7 +63,7 @@ function Router() {
         
         {/* Protected routes - require login */}
         <ProtectedRoute path="/dashboard" component={DashboardPage} />
-        <ProtectedRoute path="/messages" component={Messages} />
+        <ProtectedRoute path="/messages" component={MessagesPage} />
         <ProtectedRoute path="/reading-session/:id" component={ReadingSessionPage} />
         <ProtectedRoute path="/pay-per-minute/:readerId" component={PayPerMinuteSession} />
         <ProtectedRoute path="/add-funds" component={AddFundsPage} />
