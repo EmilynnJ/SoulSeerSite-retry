@@ -153,6 +153,37 @@ app.use((req, res, next) => {
     console.error('Failed to initialize Livestream services:', error);
   }
 
+  // Initialize automatic Stripe product synchronization
+  try {
+    const { shopStripeService } = await import('./services/shop-stripe-service');
+    
+    // Initial product sync on startup
+    console.log('[STRIPE SYNC] Starting initial product sync from Stripe');
+    shopStripeService.importProductsFromStripe()
+      .then(() => {
+        console.log('[STRIPE SYNC] Initial product sync from Stripe completed successfully');
+      })
+      .catch((error) => {
+        console.error('[STRIPE SYNC] Initial product sync failed:', error);
+      });
+    
+    // Set up periodic sync (every 6 hours)
+    const SIX_HOURS = 6 * 60 * 60 * 1000;
+    setInterval(async () => {
+      try {
+        console.log('[STRIPE SYNC] Running scheduled product sync from Stripe');
+        await shopStripeService.importProductsFromStripe();
+        console.log('[STRIPE SYNC] Scheduled product sync completed successfully');
+      } catch (error) {
+        console.error('[STRIPE SYNC] Scheduled product sync failed:', error);
+      }
+    }, SIX_HOURS);
+    
+    console.log('[STRIPE SYNC] Product synchronization scheduler initialized');
+  } catch (error) {
+    console.error('[STRIPE SYNC] Failed to initialize product sync scheduler:', error);
+  }
+
   // Initialize the daily reader payout scheduler
   try {
     const { readerBalanceService } = await import('./services/reader-balance-service');
