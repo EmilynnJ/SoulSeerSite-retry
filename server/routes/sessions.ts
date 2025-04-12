@@ -7,6 +7,21 @@ import { getStripeClient } from '../services/stripe-client';
 import { MongoUser, MongoSession, MongoReading, MongoPayment, MongoClientBalance } from '../types/mongoose';
 import crypto from 'crypto';
 
+// Add type declaration for Express Request object with user property
+declare global {
+  namespace Express {
+    interface User {
+      _id: mongoose.Types.ObjectId;
+      id?: number;
+      username: string;
+      role: string;
+      email?: string;
+      fullName?: string;
+      profileImage?: string;
+    }
+  }
+}
+
 // Set up Stripe client
 const stripe = getStripeClient();
 

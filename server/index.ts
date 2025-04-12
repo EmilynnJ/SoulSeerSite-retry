@@ -4,6 +4,7 @@ import { setupVite, serveStatic, log } from "./vite.js";
 import { connectToDatabase } from "./mongodb";
 import { config } from "dotenv";
 import path from "path";
+import sessionsRoutes from "./routes/sessions";
 import cors from "cors";
 
 // Load environment variables
@@ -98,6 +99,9 @@ app.use((req, res, next) => {
       await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
     }
   }
+  
+  // Register sessions routes
+  app.use('/api/sessions', sessionsRoutes);
   
   const server = await registerRoutes(app);
   
