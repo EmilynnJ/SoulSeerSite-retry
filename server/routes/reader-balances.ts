@@ -6,7 +6,7 @@ const router = Router();
 
 // Middleware to verify the user is authenticated
 const authenticate = (req: Request, res: Response, next: Function) => {
-  if (!req.isAuthenticated()) {
+  if (!req.user) {
     return res.status(401).json({ error: 'You must be logged in' });
   }
   next();
@@ -27,8 +27,9 @@ const readerOrAdminOnly = (req: Request, res: Response, next: Function) => {
   }
   
   const requestedReaderId = req.params.readerId;
+  const userId = req.user.id?.toString();
   
-  if (req.user.id === requestedReaderId || req.user.isAdmin) {
+  if (userId === requestedReaderId || req.user.isAdmin) {
     next();
   } else {
     return res.status(403).json({ error: 'You can only access your own reader balance' });
@@ -48,7 +49,7 @@ router.get('/my-balance', authenticate, async (req: Request, res: Response) => {
       return res.status(403).json({ error: 'Only readers can access this endpoint' });
     }
     
-    const balance = await readerBalanceService.getReaderBalance(req.user.id);
+    const balance = await readerBalanceService.getReaderBalance(req.user.id?.toString() || '');
     
     return res.status(200).json(balance);
   } catch (error: any) {
