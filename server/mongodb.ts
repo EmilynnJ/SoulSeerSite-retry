@@ -493,6 +493,49 @@ const readerBalanceSchema = new mongoose.Schema({
 
 export const ReaderBalance = mongoose.models.ReaderBalance || mongoose.model('ReaderBalance', readerBalanceSchema);
 
+// Forum system schemas
+const forumCategorySchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  description: { type: String, required: true },
+  slug: { type: String, required: true, unique: true },
+  order: { type: Number, default: 0 }, // For ordering categories on the page
+  icon: { type: String }, // Icon class or URL
+  isActive: { type: Boolean, default: true },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+}, { timestamps: true });
+
+const forumThreadSchema = new mongoose.Schema({
+  title: { type: String, required: true },
+  slug: { type: String, required: true, unique: true },
+  content: { type: String, required: true },
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  categoryId: { type: mongoose.Schema.Types.ObjectId, ref: 'ForumCategory', required: true },
+  isStickied: { type: Boolean, default: false }, // Pinned threads appear at the top
+  isLocked: { type: Boolean, default: false }, // Locked threads cannot receive new replies
+  viewCount: { type: Number, default: 0 },
+  lastPostAt: { type: Date, default: Date.now }, // Track time of last activity for sorting
+  lastPostUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  tags: [{ type: String }],
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+}, { timestamps: true });
+
+const forumPostSchema = new mongoose.Schema({
+  threadId: { type: mongoose.Schema.Types.ObjectId, ref: 'ForumThread', required: true },
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  content: { type: String, required: true },
+  isEdited: { type: Boolean, default: false },
+  editedAt: { type: Date },
+  likes: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+}, { timestamps: true });
+
+export const ForumCategory = mongoose.models.ForumCategory || mongoose.model('ForumCategory', forumCategorySchema);
+export const ForumThread = mongoose.models.ForumThread || mongoose.model('ForumThread', forumThreadSchema);
+export const ForumPost = mongoose.models.ForumPost || mongoose.model('ForumPost', forumPostSchema);
+
 // Export database helper functions
 
 // Generic find functions
