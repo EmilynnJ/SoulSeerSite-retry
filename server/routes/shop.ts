@@ -1,11 +1,11 @@
 import { Request, Response, Router } from 'express';
-import * as mongodb from '../mongodb';
 import { log } from '../server-only';
 import { shopStripeService } from '../services/shop-stripe-service';
 import Stripe from 'stripe';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
+import { storage } from '../storage';
 
 const router = Router();
 
@@ -26,7 +26,7 @@ const adminOnly = (req: Request, res: Response, next: Function) => {
 };
 
 // Configure multer for file uploads
-const storage = multer.diskStorage({
+const multerStorage = multer.diskStorage({
   destination: function (req, file, cb) {
     const dir = path.join(process.cwd(), 'public', 'uploads', 'products');
     
@@ -45,7 +45,7 @@ const storage = multer.diskStorage({
 });
 
 const upload = multer({ 
-  storage: storage,
+  storage: multerStorage,
   limits: {
     fileSize: 5 * 1024 * 1024, // 5MB limit
   },
@@ -64,7 +64,7 @@ const upload = multer({
  */
 router.get('/', async (req: Request, res: Response) => {
   try {
-    const products = await mongodb.Product.find().lean();
+    const products = await storage.getProducts();
     
     return res.status(200).json(products);
   } catch (error: any) {
@@ -78,7 +78,7 @@ router.get('/', async (req: Request, res: Response) => {
  */
 router.get('/featured', async (req: Request, res: Response) => {
   try {
-    const featuredProducts = await mongodb.Product.find({ featured: true }).lean();
+    const featuredProducts = await storage.getFeaturedProducts();
     
     return res.status(200).json(featuredProducts);
   } catch (error: any) {
@@ -93,8 +93,13 @@ router.get('/featured', async (req: Request, res: Response) => {
 router.get('/:id', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
+    const productId = parseInt(id, 10);
     
-    const product = await mongodb.Product.findById(id).lean();
+    if (isNaN(productId)) {
+      return res.status(400).json({ error: 'Invalid product ID format' });
+    }
+    
+    const product = await storage.getProduct(productId);
     
     if (!product) {
       return res.status(404).json({ error: 'Product not found' });
@@ -125,22 +130,31 @@ router.post('/', authenticate, adminOnly, upload.single('image'), async (req: Re
       imageUrl = `/uploads/products/${req.file.filename}`;
     }
     
-    // Create the product
-    const product = await mongodb.Product.create({
+    // Calculate inventory value
+    const inventoryValue = inventory ? parseInt(inventory, 10) : 0;
+    const priceValue = parseFloat(price);
+    
+    if (isNaN(priceValue)) {
+      return res.status(400).json({ error: 'Price must be a valid number' });
+    }
+    
+    // Create the product using PostgreSQL storage
+    const product = await storage.createProduct({
       name,
       description: description || '',
-      price: parseFloat(price),
+      price: Math.round(priceValue * 100), // Convert to cents for storage
       category: category || 'Miscellaneous',
-      inventory: inventory ? parseInt(inventory) : null,
+      inventory: inventoryValue,
       imageUrl,
-      featured: featured === 'true',
-      createdAt: new Date(),
-      updatedAt: new Date(),
+      isFeatured: featured === 'true',
+      stripeProductId: null,
+      stripePriceId: null,
+      sellerId: req.user?.id || null,
     });
     
     // Sync with Stripe
     try {
-      await shopStripeService.syncProductWithStripe(product._id.toString());
+      await shopStripeService.syncProductWithStripe(product.id);
     } catch (stripeError: any) {
       log(`Warning: Could not sync product with Stripe: ${stripeError.message}`, 'warning');
       // Continue anyway, we'll try again later
@@ -159,40 +173,59 @@ router.post('/', authenticate, adminOnly, upload.single('image'), async (req: Re
 router.put('/:id', authenticate, adminOnly, upload.single('image'), async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
+    const productId = parseInt(id, 10);
+    
+    if (isNaN(productId)) {
+      return res.status(400).json({ error: 'Invalid product ID format' });
+    }
+    
     const { name, description, price, category, inventory, featured } = req.body;
     
     // Get existing product
-    const product = await mongodb.Product.findById(id);
+    const existingProduct = await storage.getProduct(productId);
     
-    if (!product) {
+    if (!existingProduct) {
       return res.status(404).json({ error: 'Product not found' });
     }
     
-    // Update fields if provided
-    if (name) product.name = name;
-    if (description !== undefined) product.description = description;
-    if (price !== undefined) product.price = parseFloat(price);
-    if (category) product.category = category;
-    if (inventory !== undefined) product.inventory = inventory ? parseInt(inventory) : null;
-    if (featured !== undefined) product.featured = featured === 'true';
+    // Prepare update object
+    const updates: Partial<any> = {};
+    
+    if (name) updates.name = name;
+    if (description !== undefined) updates.description = description;
+    if (price !== undefined) {
+      const priceValue = parseFloat(price);
+      if (!isNaN(priceValue)) {
+        updates.price = Math.round(priceValue * 100); // Convert to cents
+      }
+    }
+    if (category) updates.category = category;
+    if (inventory !== undefined) {
+      updates.inventory = inventory ? parseInt(inventory, 10) : 0;
+    }
+    if (featured !== undefined) updates.isFeatured = featured === 'true';
     
     // Create relative path for the image if uploaded
     if (req.file) {
-      product.imageUrl = `/uploads/products/${req.file.filename}`;
+      updates.imageUrl = `/uploads/products/${req.file.filename}`;
     }
     
-    product.updatedAt = new Date();
-    await product.save();
+    // Update the product
+    const updatedProduct = await storage.updateProduct(productId, updates);
+    
+    if (!updatedProduct) {
+      return res.status(500).json({ error: 'Failed to update product' });
+    }
     
     // Sync with Stripe
     try {
-      await shopStripeService.syncProductWithStripe(product._id.toString());
+      await shopStripeService.syncProductWithStripe(updatedProduct.id);
     } catch (stripeError: any) {
       log(`Warning: Could not sync product with Stripe: ${stripeError.message}`, 'warning');
       // Continue anyway, we'll try again later
     }
     
-    return res.status(200).json(product);
+    return res.status(200).json(updatedProduct);
   } catch (error: any) {
     log(`Error updating product: ${error.message}`, 'error');
     return res.status(500).json({ error: 'Failed to update product', details: error.message });
