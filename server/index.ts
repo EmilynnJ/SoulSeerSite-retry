@@ -5,6 +5,7 @@ import { connectToDatabase } from "./mongodb";
 import { config } from "dotenv";
 import path from "path";
 import sessionsRoutes from "./routes/sessions";
+import payPerMinuteRoutes from "./routes/pay-per-minute";
 import cors from "cors";
 
 // Load environment variables
@@ -102,6 +103,9 @@ app.use((req, res, next) => {
   
   // Register sessions routes
   app.use('/api/sessions', sessionsRoutes);
+  
+  // Register pay-per-minute routes
+  app.use('/api/pay-per-minute', payPerMinuteRoutes);
   
   const server = await registerRoutes(app);
   

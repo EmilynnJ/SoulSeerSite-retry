@@ -457,6 +457,7 @@ const sessionSchema = new mongoose.Schema({
   authorizedAmount: { type: Number, required: true }, // Total authorized amount in cents
   billedAmount: { type: Number, default: 0 }, // Amount billed so far in cents
   lastBillingTime: { type: Date, default: Date.now }, // Time of last billing update
+  lastBilledMinute: { type: Number, default: 0 }, // Last completed minute that was billed
   roomId: { type: String, required: true }, // Room ID for the session
   provider: { type: String, enum: ['zego', 'livekit', 'internal'], default: 'zego' }, // Provider for the session
   connectionDetails: { type: Map, of: mongoose.Schema.Types.Mixed }, // Provider-specific connection details
@@ -478,6 +479,19 @@ const clientBalanceSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 export const ClientBalance = mongoose.models.ClientBalance || mongoose.model('ClientBalance', clientBalanceSchema);
+
+// Reader balance schema
+const readerBalanceSchema = new mongoose.Schema({
+  readerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
+  balance: { type: Number, default: 0 }, // Available balance in cents
+  lifetimeEarnings: { type: Number, default: 0 }, // Total lifetime earnings
+  lastPayout: { type: Date }, // Date of last payout
+  payoutAccount: { type: String }, // External payout account ID (e.g., Stripe Connect)
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+}, { timestamps: true });
+
+export const ReaderBalance = mongoose.models.ReaderBalance || mongoose.model('ReaderBalance', readerBalanceSchema);
 
 // Export database helper functions
 
