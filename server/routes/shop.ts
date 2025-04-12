@@ -238,9 +238,14 @@ router.put('/:id', authenticate, adminOnly, upload.single('image'), async (req: 
 router.delete('/:id', authenticate, adminOnly, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
+    const productId = parseInt(id, 10);
+    
+    if (isNaN(productId)) {
+      return res.status(400).json({ error: 'Invalid product ID format' });
+    }
     
     // Find the product first
-    const product = await mongodb.Product.findById(id);
+    const product = await storage.getProduct(productId);
     
     if (!product) {
       return res.status(404).json({ error: 'Product not found' });
@@ -262,8 +267,14 @@ router.delete('/:id', authenticate, adminOnly, async (req: Request, res: Respons
       }
     }
     
-    // Delete from MongoDB
-    await mongodb.Product.findByIdAndDelete(id);
+    // Delete from PostgreSQL
+    // Since we don't have a direct delete method in the storage interface,
+    // we'll mark the product as inactive by updating it
+    await storage.updateProduct(productId, { 
+      isActive: false, 
+      // We could also update other fields to indicate deletion
+      name: `[DELETED] ${product.name}`
+    });
     
     return res.status(200).json({ message: 'Product deleted successfully' });
   } catch (error: any) {
@@ -278,7 +289,12 @@ router.delete('/:id', authenticate, adminOnly, async (req: Request, res: Respons
 router.post('/:id/checkout', authenticate, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
+    const productId = parseInt(id, 10);
     const { quantity = 1 } = req.body;
+    
+    if (isNaN(productId)) {
+      return res.status(400).json({ error: 'Invalid product ID format' });
+    }
     
     if (!req.user) {
       return res.status(401).json({ error: 'User not authenticated' });
@@ -290,9 +306,9 @@ router.post('/:id/checkout', authenticate, async (req: Request, res: Response) =
     
     // Create checkout session
     const sessionUrl = await shopStripeService.createCheckoutSession(
-      id,
+      productId,
       req.user.id,
-      quantity,
+      parseInt(quantity as string, 10) || 1,
       successUrl,
       cancelUrl
     );

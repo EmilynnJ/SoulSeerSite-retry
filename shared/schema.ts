@@ -105,6 +105,7 @@ export const products = pgTable('products', {
   category: varchar('category', { length: 100 }).notNull(),
   inventory: integer('inventory').default(0),
   isFeatured: boolean('is_featured').default(false),
+  isActive: boolean('is_active').default(true),
   sellerId: integer('seller_id').references(() => users.id),
   stripeProductId: varchar('stripe_product_id', { length: 255 }),
   stripePriceId: varchar('stripe_price_id', { length: 255 }),
