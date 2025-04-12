@@ -122,6 +122,20 @@ export interface IStorage {
   getUnprocessedGifts(): Promise<Gift[]>;
   markGiftAsProcessed(id: number): Promise<Gift | undefined>;
   
+  // Messaging - Conversations
+  createConversation(conversation: NewConversation): Promise<Conversation>;
+  getConversation(id: number): Promise<Conversation | undefined>;
+  getConversationByUsers(user1Id: number, user2Id: number): Promise<Conversation | undefined>;
+  getConversationsByUser(userId: number): Promise<Conversation[]>;
+  updateConversation(id: number, conversation: Partial<NewConversation>): Promise<Conversation | undefined>;
+  
+  // Messaging - Messages
+  createMessage(message: NewMessage): Promise<Message>;
+  getMessage(id: number): Promise<Message | undefined>;
+  getMessagesByConversation(conversationId: number): Promise<Message[]>;
+  getUnreadMessageCount(userId: number): Promise<number>;
+  markMessageAsRead(messageId: number): Promise<Message | undefined>;
+  
   // Session store for authentication
   sessionStore: SessionStore;
 }
@@ -522,6 +536,93 @@ export class PostgresStorage implements IStorage {
       .where(eq(gifts.id, id))
       .returning();
     return gift;
+  }
+
+  // Conversation methods
+  async createConversation(conversationData: NewConversation): Promise<Conversation> {
+    const [conversation] = await db.insert(conversations).values(conversationData).returning();
+    return conversation;
+  }
+
+  async getConversation(id: number): Promise<Conversation | undefined> {
+    const result = await db.select().from(conversations).where(eq(conversations.id, id));
+    return result[0];
+  }
+
+  async getConversationByUsers(user1Id: number, user2Id: number): Promise<Conversation | undefined> {
+    // Since a conversation can be stored as (user1, user2) or (user2, user1), we need to check both cases
+    const result = await db.select().from(conversations).where(
+      or(
+        and(eq(conversations.user1Id, user1Id), eq(conversations.user2Id, user2Id)),
+        and(eq(conversations.user1Id, user2Id), eq(conversations.user2Id, user1Id))
+      )
+    );
+    return result[0];
+  }
+
+  async getConversationsByUser(userId: number): Promise<Conversation[]> {
+    // Fetch all conversations where the user is either user1 or user2
+    return await db.select().from(conversations).where(
+      or(
+        eq(conversations.user1Id, userId),
+        eq(conversations.user2Id, userId)
+      )
+    ).orderBy(desc(conversations.lastMessageAt));
+  }
+
+  async updateConversation(id: number, conversationData: Partial<NewConversation>): Promise<Conversation | undefined> {
+    const [conversation] = await db.update(conversations)
+      .set(conversationData)
+      .where(eq(conversations.id, id))
+      .returning();
+    return conversation;
+  }
+
+  // Message methods
+  async createMessage(messageData: NewMessage): Promise<Message> {
+    const [message] = await db.insert(messages).values(messageData).returning();
+    
+    // Update the conversation's lastMessageAt timestamp
+    await this.updateConversation(messageData.conversationId, {
+      lastMessageAt: new Date()
+    } as any);
+    
+    return message;
+  }
+
+  async getMessage(id: number): Promise<Message | undefined> {
+    const result = await db.select().from(messages).where(eq(messages.id, id));
+    return result[0];
+  }
+
+  async getMessagesByConversation(conversationId: number): Promise<Message[]> {
+    return await db.select().from(messages)
+      .where(eq(messages.conversationId, conversationId))
+      .orderBy(asc(messages.createdAt));
+  }
+
+  async getUnreadMessageCount(userId: number): Promise<number> {
+    const result = await db.select({ count: count() })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.recipientId, userId),
+          eq(messages.isRead, false)
+        )
+      );
+    
+    return result[0]?.count || 0;
+  }
+
+  async markMessageAsRead(messageId: number): Promise<Message | undefined> {
+    const [message] = await db.update(messages)
+      .set({ 
+        isRead: true,
+        readAt: new Date()
+      })
+      .where(eq(messages.id, messageId))
+      .returning();
+    return message;
   }
 }
 

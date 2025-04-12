@@ -313,3 +313,36 @@ export const insertForumPostSchema = createInsertSchema(forumPosts)
 
 export type ForumPost = typeof forumPosts.$inferSelect;
 export type NewForumPost = z.infer<typeof insertForumPostSchema>;
+
+// Conversations table (for private messaging)
+export const conversations = pgTable('conversations', {
+  id: serial('id').primaryKey(),
+  user1Id: integer('user1_id').notNull().references(() => users.id),
+  user2Id: integer('user2_id').notNull().references(() => users.id),
+  lastMessageAt: timestamp('last_message_at').defaultNow(),
+  createdAt: timestamp('created_at').defaultNow()
+});
+
+export const insertConversationSchema = createInsertSchema(conversations)
+  .omit({ id: true, lastMessageAt: true, createdAt: true });
+
+export type Conversation = typeof conversations.$inferSelect;
+export type NewConversation = z.infer<typeof insertConversationSchema>;
+
+// Messages table
+export const messages = pgTable('messages', {
+  id: serial('id').primaryKey(),
+  conversationId: integer('conversation_id').notNull().references(() => conversations.id),
+  senderId: integer('sender_id').notNull().references(() => users.id),
+  recipientId: integer('recipient_id').notNull().references(() => users.id),
+  content: text('content').notNull(),
+  isRead: boolean('is_read').default(false),
+  readAt: timestamp('read_at'),
+  createdAt: timestamp('created_at').defaultNow()
+});
+
+export const insertMessageSchema = createInsertSchema(messages)
+  .omit({ id: true, isRead: true, readAt: true, createdAt: true });
+
+export type Message = typeof messages.$inferSelect;
+export type NewMessage = z.infer<typeof insertMessageSchema>;
