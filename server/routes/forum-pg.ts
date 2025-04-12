@@ -181,8 +181,9 @@ export function createForumRouter(storage: IStorage) {
         return res.status(404).json({ message: 'Thread not found' });
       }
       
-      // Increment view count
-      await storage.updateForumThread(id, { views: thread.views + 1 });
+      // Increment view count - handle null views
+      const currentViews = thread.views || 0;
+      await storage.updateForumThread(id, { views: currentViews + 1 });
       
       // Get posts in this thread
       const posts = await storage.getForumPostsByThread(id);
@@ -295,9 +296,12 @@ export function createForumRouter(storage: IStorage) {
       
       // Get all threads, sort by last activity, and limit
       const threads = await storage.getForumThreads();
-      const sortedThreads = threads.sort((a, b) => 
-        new Date(b.lastActivity).getTime() - new Date(a.lastActivity).getTime()
-      ).slice(0, limit);
+      const sortedThreads = threads.sort((a, b) => {
+        // Handle null values and use createdAt as a fallback if lastActivity is null
+        const dateA = a.lastActivity || a.createdAt || new Date();
+        const dateB = b.lastActivity || b.createdAt || new Date();
+        return new Date(dateB).getTime() - new Date(dateA).getTime();
+      }).slice(0, limit);
       
       // Get category info
       const categoryIds = Array.from(new Set(sortedThreads.map(thread => thread.categoryId)));
@@ -403,6 +407,11 @@ export function createForumRouter(storage: IStorage) {
         return res.status(404).json({ message: 'Thread not found' });
       }
       
+      // Check if user is authenticated
+      if (!req.user) {
+        return res.status(401).json({ message: 'User not authenticated' });
+      }
+      
       // Check permissions - admin or thread creator
       if (req.user.role !== 'admin' && thread.userId !== req.user.id) {
         return res.status(403).json({ message: 'You do not have permission to delete this thread' });
@@ -435,6 +444,11 @@ export function createForumRouter(storage: IStorage) {
       const post = await storage.getForumPost(id);
       if (!post) {
         return res.status(404).json({ message: 'Post not found' });
+      }
+      
+      // Check if user is authenticated
+      if (!req.user) {
+        return res.status(401).json({ message: 'User not authenticated' });
       }
       
       // Check permissions - admin or post creator
