@@ -173,27 +173,26 @@ export class ShopStripeService {
           const stripePrice = prices.data[0];
           const priceAmount = stripePrice.unit_amount ? stripePrice.unit_amount / 100 : 0;
           
-          // Use findOneAndUpdate for atomic operation instead of findOne + save
+          // Use findOneAndUpdate with explicit timeout for atomic operation instead of findOne + save
           try {
-            // Try to update existing product first
-            const updateResult = await mongodb.Product.findOneAndUpdate(
-              { stripeProductId: stripeProduct.id },
-              {
-                $set: {
-                  name: stripeProduct.name,
-                  description: stripeProduct.description || '',
-                  price: priceAmount,
-                  imageUrl: stripeProduct.images && stripeProduct.images.length > 0 ? stripeProduct.images[0] : null,
-                  stripePriceId: stripePrice.id,
-                  category: stripeProduct.metadata?.category || 'Miscellaneous',
-                  updatedAt: new Date()
-                }
-              },
-              { new: true }
-            );
+            // First check if product exists to avoid timeout with findOneAndUpdate
+            const existingProduct = await mongodb.Product.findOne(
+              { stripeProductId: stripeProduct.id }
+            ).maxTimeMS(5000);
             
-            if (updateResult) {
-              log(`Updated existing MongoDB product ${updateResult._id} from Stripe product ${stripeProduct.id}`, 'shop-stripe');
+            if (existingProduct) {
+              // Update existing product with fields
+              existingProduct.name = stripeProduct.name;
+              existingProduct.description = stripeProduct.description || '';
+              existingProduct.price = priceAmount;
+              existingProduct.imageUrl = stripeProduct.images && stripeProduct.images.length > 0 ? stripeProduct.images[0] : null;
+              existingProduct.stripePriceId = stripePrice.id;
+              existingProduct.category = stripeProduct.metadata?.category || 'Miscellaneous';
+              existingProduct.updatedAt = new Date();
+              
+              // Save changes
+              await existingProduct.save();
+              log(`Updated existing MongoDB product ${existingProduct._id} from Stripe product ${stripeProduct.id}`, 'shop-stripe');
             } else {
               // Product doesn't exist, create a new one
               const newProduct = await mongodb.Product.create({

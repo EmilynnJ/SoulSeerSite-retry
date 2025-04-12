@@ -39,16 +39,22 @@ export async function connectToDatabase() {
       // Get more details about the connection issues
       const startTime = Date.now();
       try {
-        // Connect to MongoDB Atlas with robust connection parameters
-        // Connect with standard parameters only
+        // Connect to MongoDB Atlas with refined connection parameters
+        // Improved for dynamic IP handling and whitelist issues
         await mongoose.connect(uri, {
-          socketTimeoutMS: 30000,         // Shorter timeout for socket operations
-          connectTimeoutMS: 30000,        // Shorter timeout for initial connection
-          serverSelectionTimeoutMS: 30000, // Shorter timeout for server selection
-          family: 4,                      // Force IPv4 (helps with Replit connectivity)
-          maxPoolSize: 5,                 // Reduced pool size for Replit environment
+          socketTimeoutMS: 45000,         // Longer timeout for socket operations
+          connectTimeoutMS: 45000,        // Longer timeout for initial connection
+          serverSelectionTimeoutMS: 45000, // Longer timeout for server selection
+          family: 4,                      // Force IPv4 (helps with Replit connectivity) 
+          maxPoolSize: 3,                 // Reduced pool size for Replit environment
           retryWrites: true,              // Retry write operations
-          retryReads: true                // Retry read operations
+          retryReads: true,               // Retry read operations
+          // Removed problematic parameters
+          // NO bufferCommands: false - too strict and causes timeouts
+          // NO maxTimeMS: 10000 - too short for operations
+          autoIndex: false,               // Don't build indexes to prevent timeout
+          minPoolSize: 1,                 // Minimum connection pool size
+          heartbeatFrequencyMS: 30000     // Heartbeat to prevent idle disconnects
         });
         
         log(`MongoDB Atlas connection successful in ${Date.now() - startTime}ms`, 'database');
