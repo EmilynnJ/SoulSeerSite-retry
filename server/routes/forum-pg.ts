@@ -69,7 +69,7 @@ export function createForumRouter(storage: IStorage) {
       const threads = await storage.getForumThreadsByCategory(id);
       
       // Get users who created the threads
-      const userIds = [...new Set(threads.map(thread => thread.userId))];
+      const userIds = Array.from(new Set(threads.map(thread => thread.userId)));
       const users = await Promise.all(userIds.map(userId => storage.getUser(userId)));
       const userMap = new Map(users.filter(Boolean).map(user => [user!.id, user]));
       
@@ -183,7 +183,7 @@ export function createForumRouter(storage: IStorage) {
       const posts = await storage.getForumPostsByThread(id);
       
       // Get users who created the posts
-      const userIds = [...new Set(posts.map(post => post.userId))];
+      const userIds = Array.from(new Set(posts.map(post => post.userId)));
       userIds.push(thread.userId); // Add thread author
       
       const users = await Promise.all(userIds.map(userId => storage.getUser(userId)));
@@ -256,10 +256,8 @@ export function createForumRouter(storage: IStorage) {
         content
       });
       
-      // Update thread's last activity
-      await storage.updateForumThread(threadId, {
-        lastActivity: new Date()
-      });
+      // Update thread's timestamp to reflect latest activity
+      await storage.updateForumThread(threadId, {});
       
       // Get author
       const author = await storage.getUser(req.user.id);
@@ -292,12 +290,12 @@ export function createForumRouter(storage: IStorage) {
       ).slice(0, limit);
       
       // Get category info
-      const categoryIds = [...new Set(sortedThreads.map(thread => thread.categoryId))];
+      const categoryIds = Array.from(new Set(sortedThreads.map(thread => thread.categoryId)));
       const categories = await Promise.all(categoryIds.map(id => storage.getForumCategory(id)));
       const categoryMap = new Map(categories.filter(Boolean).map(category => [category!.id, category]));
       
       // Get user info
-      const userIds = [...new Set(sortedThreads.map(thread => thread.userId))];
+      const userIds = Array.from(new Set(sortedThreads.map(thread => thread.userId)));
       const users = await Promise.all(userIds.map(id => storage.getUser(id)));
       const userMap = new Map(users.filter(Boolean).map(user => [user!.id, user]));
       

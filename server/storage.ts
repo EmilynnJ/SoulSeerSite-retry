@@ -89,8 +89,15 @@ export interface IStorage {
   updateForumPost(id: number, forumPost: Partial<NewForumPost>): Promise<ForumPost | undefined>;
   
   // Forum Categories
+  createForumCategory(forumCategory: NewForumCategory): Promise<ForumCategory>;
   getForumCategories(): Promise<ForumCategory[]>;
   getForumCategory(id: number): Promise<ForumCategory | undefined>;
+  updateForumCategory(id: number, forumCategory: Partial<NewForumCategory>): Promise<ForumCategory | undefined>;
+  
+  // Forum Methods (Delete operations)
+  deleteForumThread(id: number): Promise<void>;
+  deleteForumPost(id: number): Promise<void>;
+  deleteForumPostsByThread(threadId: number): Promise<void>;
   
   // Sessions (Pay-per-minute)
   createSession(session: NewSession): Promise<Session>;
@@ -347,6 +354,11 @@ export class PostgresStorage implements IStorage {
   }
   
   // Forum Category methods
+  async createForumCategory(categoryData: NewForumCategory): Promise<ForumCategory> {
+    const [category] = await db.insert(forumCategories).values(categoryData).returning();
+    return category;
+  }
+  
   async getForumCategories(): Promise<ForumCategory[]> {
     return await db.select().from(forumCategories);
   }
@@ -354,6 +366,27 @@ export class PostgresStorage implements IStorage {
   async getForumCategory(id: number): Promise<ForumCategory | undefined> {
     const result = await db.select().from(forumCategories).where(eq(forumCategories.id, id));
     return result[0];
+  }
+  
+  async updateForumCategory(id: number, categoryData: Partial<NewForumCategory>): Promise<ForumCategory | undefined> {
+    const [category] = await db.update(forumCategories)
+      .set(categoryData)
+      .where(eq(forumCategories.id, id))
+      .returning();
+    return category;
+  }
+  
+  // Forum delete operations
+  async deleteForumThread(id: number): Promise<void> {
+    await db.delete(forumThreads).where(eq(forumThreads.id, id));
+  }
+  
+  async deleteForumPost(id: number): Promise<void> {
+    await db.delete(forumPosts).where(eq(forumPosts.id, id));
+  }
+  
+  async deleteForumPostsByThread(threadId: number): Promise<void> {
+    await db.delete(forumPosts).where(eq(forumPosts.threadId, threadId));
   }
   
   // Session methods (for pay-per-minute readings)
