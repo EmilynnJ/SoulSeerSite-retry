@@ -7,17 +7,17 @@ import { getStripeClient } from '../services/stripe-client';
 import { MongoUser, MongoSession, MongoReading, MongoPayment, MongoClientBalance } from '../types/mongoose';
 import crypto from 'crypto';
 
-// Add type declaration for Express Request object with user property
+// User type declaration with proper types
 declare global {
   namespace Express {
     interface User {
       _id: mongoose.Types.ObjectId;
       id?: number;
       username: string;
-      role: string;
-      email?: string;
-      fullName?: string;
-      profileImage?: string;
+      role: "client" | "reader" | "admin";
+      email: string;
+      fullName: string;
+      profileImage?: string | null;
     }
   }
 }

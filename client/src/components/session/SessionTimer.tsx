@@ -236,7 +236,7 @@ export const SessionTimer: React.FC<SessionTimerProps> = ({
       toast({
         title: 'Session time running low',
         description: 'Less than 1 minute remaining. Please extend your session.',
-        variant: 'warning',
+        variant: 'destructive',
       });
     }
   }, [elapsedSeconds, isRunning, updateSession, remainingMinutes, needsExtension, showExtendOptions, toast]);
@@ -315,7 +315,7 @@ export const SessionTimer: React.FC<SessionTimerProps> = ({
           
           {/* Extension Alert */}
           {needsExtension && (
-            <Alert variant="warning" className="animate-pulse">
+            <Alert variant="destructive" className="animate-pulse">
               <AlertCircle className="h-4 w-4" />
               <AlertTitle>Time running out</AlertTitle>
               <AlertDescription>
