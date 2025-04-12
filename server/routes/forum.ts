@@ -7,7 +7,7 @@ const router = express.Router();
 
 // Authentication middleware
 const authenticate = (req: Request, res: Response, next: NextFunction) => {
-  if (!req.isAuthenticated()) {
+  if (!req.user) {
     return res.status(401).json({ message: 'You must be logged in to perform this action' });
   }
   next();
@@ -15,7 +15,7 @@ const authenticate = (req: Request, res: Response, next: NextFunction) => {
 
 // Admin-only middleware
 const adminOnly = (req: Request, res: Response, next: NextFunction) => {
-  if (!req.isAuthenticated() || req.user.role !== 'admin') {
+  if (!req.user || req.user.role !== 'admin') {
     return res.status(403).json({ message: 'Admin access required' });
   }
   next();
@@ -63,15 +63,15 @@ router.get('/categories', async (req: Request, res: Response) => {
       .lean();
     
     // Count threads in each category
-    const categoriesWithCounts = await Promise.all(categories.map(async (category) => {
+    const categoriesWithCounts = await Promise.all(categories.map(async (category: any) => {
       const threadCount = await ForumThread.countDocuments({ categoryId: category._id });
       
       return {
-        id: category._id.toString(),
-        name: category.name,
-        slug: category.slug,
-        description: category.description,
-        order: category.order,
+        id: category._id ? category._id.toString() : '',
+        name: category.name || '',
+        slug: category.slug || '',
+        description: category.description || '',
+        order: category.order || 0,
         threadCount
       };
     }));
