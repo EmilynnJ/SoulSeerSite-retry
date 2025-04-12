@@ -167,12 +167,24 @@ export const SessionTimer: React.FC<SessionTimerProps> = ({
     sendHeartbeat();
     
     // Set up heartbeat interval (every 30 seconds)
+    // Keep the heartbeat at 30 seconds for presence verification
     heartbeatIntervalRef.current = window.setInterval(sendHeartbeat, 30000);
     
     // Set up timer interval (every second)
     timerIntervalRef.current = window.setInterval(() => {
       if (sessionActive) {
-        setElapsedSeconds(prev => prev + 1);
+        setElapsedSeconds(prev => {
+          const newValue = prev + 1;
+          
+          // Send heartbeat at minute boundaries to ensure per-minute billing
+          // This is in addition to the 30-second heartbeat for presence verification
+          if (newValue % 60 === 0) {
+            sendHeartbeat();
+            console.log(`Minute completed: ${newValue / 60} minutes - Sending billing heartbeat`);
+          }
+          
+          return newValue;
+        });
       }
     }, 1000);
     
