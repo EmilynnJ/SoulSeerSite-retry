@@ -135,6 +135,88 @@ export class ShopStripeService {
   }
   
   /**
+   * Import products from Stripe to MongoDB
+   * 
+   * This retrieves all products from Stripe and creates or updates them in MongoDB
+   */
+  async importProductsFromStripe(): Promise<void> {
+    try {
+      log('Starting import of products from Stripe to MongoDB', 'shop-stripe');
+      
+      // Retrieve all active products from Stripe
+      const stripeProducts = await stripe.products.list({ active: true });
+      
+      if (stripeProducts.data.length === 0) {
+        log('No active products found in Stripe', 'shop-stripe');
+        return;
+      }
+      
+      log(`Found ${stripeProducts.data.length} active products in Stripe`, 'shop-stripe');
+      
+      // Process each Stripe product
+      for (const stripeProduct of stripeProducts.data) {
+        try {
+          // Get product prices (we'll use the first active price)
+          const prices = await stripe.prices.list({
+            product: stripeProduct.id,
+            active: true
+          });
+          
+          if (prices.data.length === 0) {
+            log(`No active prices found for Stripe product ${stripeProduct.id}`, 'shop-stripe');
+            continue;
+          }
+          
+          const stripePrice = prices.data[0];
+          const priceAmount = stripePrice.unit_amount ? stripePrice.unit_amount / 100 : 0;
+          
+          // Check if product already exists in MongoDB by Stripe ID
+          let product = await mongodb.Product.findOne({ stripeProductId: stripeProduct.id });
+          
+          if (product) {
+            // Update existing product
+            product.name = stripeProduct.name;
+            product.description = stripeProduct.description || '';
+            product.price = priceAmount;
+            product.imageUrl = stripeProduct.images && stripeProduct.images.length > 0 ? stripeProduct.images[0] : null;
+            product.stripePriceId = stripePrice.id;
+            product.category = stripeProduct.metadata?.category || 'Miscellaneous';
+            product.updatedAt = new Date();
+            
+            await product.save();
+            log(`Updated existing MongoDB product ${product._id} from Stripe product ${stripeProduct.id}`, 'shop-stripe');
+          } else {
+            // Create new product in MongoDB
+            product = await mongodb.Product.create({
+              name: stripeProduct.name,
+              description: stripeProduct.description || '',
+              price: priceAmount,
+              imageUrl: stripeProduct.images && stripeProduct.images.length > 0 ? stripeProduct.images[0] : null,
+              stripeProductId: stripeProduct.id,
+              stripePriceId: stripePrice.id,
+              category: stripeProduct.metadata?.category || 'Miscellaneous',
+              featured: false,
+              inventory: null, // Unlimited inventory by default
+              createdAt: new Date(),
+              updatedAt: new Date()
+            });
+            
+            log(`Created new MongoDB product ${product._id} from Stripe product ${stripeProduct.id}`, 'shop-stripe');
+          }
+        } catch (productError: any) {
+          log(`Error processing Stripe product ${stripeProduct.id}: ${productError.message}`, 'shop-stripe-error');
+          // Continue with next product
+        }
+      }
+      
+      log('Completed import of products from Stripe to MongoDB', 'shop-stripe');
+    } catch (error: any) {
+      log(`Error importing products from Stripe: ${error.message}`, 'shop-stripe-error');
+      throw error;
+    }
+  }
+  
+  /**
    * Create a checkout session for a product
    * 
    * @param productId MongoDB product ID

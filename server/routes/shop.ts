@@ -273,6 +273,7 @@ router.post('/:id/checkout', authenticate, async (req: Request, res: Response) =
 
 /**
  * Sync all products with Stripe (admin only)
+ * This pushes MongoDB products to Stripe
  */
 router.post('/sync-with-stripe', authenticate, adminOnly, async (req: Request, res: Response) => {
   try {
@@ -282,6 +283,21 @@ router.post('/sync-with-stripe', authenticate, adminOnly, async (req: Request, r
   } catch (error: any) {
     log(`Error synchronizing products with Stripe: ${error.message}`, 'error');
     return res.status(500).json({ error: 'Failed to synchronize products with Stripe', details: error.message });
+  }
+});
+
+/**
+ * Import products from Stripe (admin only)
+ * This pulls Stripe products into MongoDB
+ */
+router.post('/import-from-stripe', authenticate, adminOnly, async (req: Request, res: Response) => {
+  try {
+    await shopStripeService.importProductsFromStripe();
+    
+    return res.status(200).json({ message: 'All products imported from Stripe successfully' });
+  } catch (error: any) {
+    log(`Error importing products from Stripe: ${error.message}`, 'error');
+    return res.status(500).json({ error: 'Failed to import products from Stripe', details: error.message });
   }
 });
 
