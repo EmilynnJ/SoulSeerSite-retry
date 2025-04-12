@@ -14,8 +14,13 @@ import { useToast } from '@/hooks/use-toast';
 import { Loader2, DollarSign, RefreshCw, AlertTriangle } from 'lucide-react';
 import { formatCurrency } from '@/lib/utils';
 
-// Predefined top-up amounts
-const TOPUP_AMOUNTS = [1000, 2500, 5000, 10000]; // in cents ($10, $25, $50, $100)
+// Predefined top-up amounts with reading time value
+const TOPUP_OPTIONS = [
+  { amount: 1000, label: '$10', readingTime: '20-25 min' },
+  { amount: 2500, label: '$25', readingTime: '50-60 min' },
+  { amount: 5000, label: '$50', readingTime: '100-120 min' },
+  { amount: 10000, label: '$100', readingTime: '200-240 min' }
+];
 
 export const ClientBalance = () => {
   const [customAmount, setCustomAmount] = useState<string>('');
@@ -123,40 +128,61 @@ export const ClientBalance = () => {
     );
   }
 
-  const { balance = 0, lockedAmount = 0 } = balanceData || {};
+  // Define type for the balance data
+  interface BalanceData {
+    balance: number;
+    lockedAmount: number;
+    [key: string]: any;
+  }
+
+  // Using type assertion with default values
+  const { balance = 0, lockedAmount = 0 } = (balanceData || {}) as BalanceData;
   const availableBalance = balance;
   const reservedBalance = lockedAmount;
   const totalBalance = balance + lockedAmount;
 
   return (
     <Card className="w-full">
-      <CardHeader>
-        <CardTitle>Your Reading Balance</CardTitle>
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2">
+          <div className="p-1.5 bg-primary/10 rounded-full">
+            <DollarSign className="h-5 w-5 text-primary" />
+          </div>
+          Reading Balance
+        </CardTitle>
         <CardDescription>
-          Add funds to your account to book readings
+          Add funds to your account for pay-per-minute readings
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <div className="grid gap-4">
-          <div className="flex justify-between items-center">
-            <span className="text-sm font-medium">Current Balance:</span>
-            <span className="text-lg font-bold text-primary">
+        <div className="bg-muted/50 rounded-xl p-4 mb-4">
+          <div className="flex flex-col items-center justify-center mb-3">
+            <span className="text-sm text-muted-foreground mb-1">Available Balance</span>
+            <span className="text-3xl font-bold text-primary">
               {formatCurrency(availableBalance / 100)}
             </span>
+            
+            {/* Visual indication of balance - empty if balance is low */}
+            <div className="w-full mt-3 bg-muted rounded-full h-2.5 overflow-hidden">
+              <div 
+                className="bg-primary h-full rounded-full transition-all duration-500"
+                style={{ width: `${Math.min(100, (availableBalance / 10000) * 100)}%` }}
+              />
+            </div>
           </div>
           
-          {reservedBalance > 0 && (
-            <div className="flex justify-between items-center">
-              <span className="text-sm font-medium">Reserved for Sessions:</span>
-              <span className="text-base">
-                {formatCurrency(reservedBalance / 100)}
-              </span>
-            </div>
-          )}
-          
-          <div className="flex justify-between items-center border-t pt-2">
-            <span className="text-sm font-medium">Total Balance:</span>
-            <span className="text-base font-semibold">
+          <div className="grid grid-cols-2 gap-3 text-sm pt-2 border-t border-border/50">
+            {reservedBalance > 0 && (
+              <>
+                <span className="text-muted-foreground">Reserved:</span>
+                <span className="text-right font-medium">
+                  {formatCurrency(reservedBalance / 100)}
+                </span>
+              </>
+            )}
+            
+            <span className="text-muted-foreground">Total Balance:</span>
+            <span className="text-right font-medium">
               {formatCurrency(totalBalance / 100)}
             </span>
           </div>
@@ -164,21 +190,22 @@ export const ClientBalance = () => {
 
         <div className="mt-6">
           <h3 className="text-sm font-medium mb-3">Add Funds:</h3>
-          <div className="grid grid-cols-2 gap-2 mb-4">
-            {TOPUP_AMOUNTS.map((amount) => (
+          <div className="grid grid-cols-2 gap-3 mb-4">
+            {TOPUP_OPTIONS.map((option) => (
               <Button 
-                key={amount}
-                onClick={() => handleAddFunds(amount)}
+                key={option.amount}
+                onClick={() => handleAddFunds(option.amount)}
                 variant="outline"
                 disabled={isAddingFunds}
-                className={processingAmount === amount ? 'border-primary' : ''}
+                className={`flex-col h-auto py-3 ${processingAmount === option.amount ? 'border-primary' : ''}`}
               >
-                {processingAmount === amount ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                {processingAmount === option.amount ? (
+                  <Loader2 className="h-5 w-5 animate-spin mb-1" />
                 ) : (
-                  <DollarSign className="mr-2 h-4 w-4" />
+                  <DollarSign className="h-5 w-5 mb-1" />
                 )}
-                {formatCurrency(amount / 100)}
+                <span className="text-base font-medium">{option.label}</span>
+                <span className="text-xs text-muted-foreground mt-1">≈ {option.readingTime}</span>
               </Button>
             ))}
           </div>
@@ -208,8 +235,15 @@ export const ClientBalance = () => {
           </form>
         </div>
       </CardContent>
-      <CardFooter className="text-xs text-muted-foreground">
-        Funds added to your balance can be used for pay-per-minute readings.
+      <CardFooter className="text-xs text-muted-foreground flex flex-col items-start gap-2 border-t pt-4">
+        <div className="flex items-center gap-1">
+          <DollarSign className="h-3 w-3" />
+          Funds added to your balance can be used for pay-per-minute readings.
+        </div>
+        <div className="flex items-center gap-1">
+          <AlertTriangle className="h-3 w-3" />
+          For development purposes only. In production, this would use Stripe for secure payments.
+        </div>
       </CardFooter>
     </Card>
   );
