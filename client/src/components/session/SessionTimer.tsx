@@ -222,21 +222,49 @@ export const SessionTimer: React.FC<SessionTimerProps> = ({
     };
   }, [isRunning]);
   
-  // Session update effect (heartbeat every 30 seconds)
+  // Session update effect (heartbeat mechanism)
   const updateSessionData = useCallback(() => {
+    // Primary heartbeat (every 30 seconds)
     if (isRunning && elapsedSeconds > 0 && elapsedSeconds % 30 === 0) {
-      console.log(`Sending session heartbeat at ${elapsedSeconds} seconds`);
+      console.log(`Sending regular session heartbeat at ${elapsedSeconds} seconds`);
       updateSession();
     }
     
-    // Also check if we're approaching time limit
+    // Additional heartbeat for critical periods (when running low on time)
+    // More frequent updates when time is running low (every 15 seconds)
+    if (isRunning && remainingMinutes <= 3 && elapsedSeconds > 0 && elapsedSeconds % 15 === 0) {
+      console.log(`Sending critical session heartbeat at ${elapsedSeconds} seconds (low time remaining)`);
+      updateSession();
+    }
+    
+    // Time limit warnings with different thresholds
+    // Warning at 3 minutes
+    if (remainingMinutes <= 3 && remainingMinutes > 2 && !needsExtension) {
+      toast({
+        title: 'Session time running low',
+        description: 'About 3 minutes remaining. Consider extending your session.',
+        variant: 'default', // Less urgent warning
+      });
+    }
+    
+    // Warning at 2 minutes
+    if (remainingMinutes <= 2 && remainingMinutes > 1 && !needsExtension) {
+      toast({
+        title: 'Session time running low',
+        description: 'About 2 minutes remaining. Please extend your session soon.',
+        variant: 'default', // Using default since 'warning' is not available
+        className: 'bg-yellow-100 border-yellow-400 text-yellow-800'
+      });
+    }
+    
+    // Critical warning at 1 minute
     if (remainingMinutes <= 1 && !needsExtension && !showExtendOptions) {
       setNeedsExtension(true);
       setShowExtendOptions(true);
       toast({
-        title: 'Session time running low',
-        description: 'Less than 1 minute remaining. Please extend your session.',
-        variant: 'destructive',
+        title: 'Session ending soon',
+        description: 'Less than 1 minute remaining. Please extend your session now.',
+        variant: 'destructive', // Highest urgency
       });
     }
   }, [elapsedSeconds, isRunning, updateSession, remainingMinutes, needsExtension, showExtendOptions, toast]);
@@ -315,11 +343,14 @@ export const SessionTimer: React.FC<SessionTimerProps> = ({
           
           {/* Extension Alert */}
           {needsExtension && (
-            <Alert variant="destructive" className="animate-pulse">
+            <Alert 
+              variant="destructive" 
+              className="animate-pulse border-destructive bg-destructive/10 text-destructive"
+            >
               <AlertCircle className="h-4 w-4" />
-              <AlertTitle>Time running out</AlertTitle>
+              <AlertTitle className="font-bold">Time running out!</AlertTitle>
               <AlertDescription>
-                Please extend your session to continue the reading.
+                Your session will end soon. Please extend now to continue the reading.
               </AlertDescription>
             </Alert>
           )}

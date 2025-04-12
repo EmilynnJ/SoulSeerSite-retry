@@ -37,11 +37,41 @@ export const VideoCallInterface: React.FC<VideoCallInterfaceProps> = ({
         setIsLoading(true);
         setError(null);
 
+        // Check for browser compatibility
+        if (typeof navigator.mediaDevices === 'undefined' || 
+            typeof navigator.mediaDevices.getUserMedia === 'undefined') {
+          throw new Error('Your browser does not support WebRTC. Please use a modern browser like Chrome or Firefox.');
+        }
+
+        // Check if camera and microphone permissions are granted
+        try {
+          await navigator.mediaDevices.getUserMedia({ 
+            video: sessionType === 'video', 
+            audio: true 
+          });
+          console.log('Media permissions granted');
+        } catch (mediaError: any) {
+          console.error('Media permission error:', mediaError);
+          if (mediaError.name === 'NotAllowedError' || mediaError.name === 'PermissionDeniedError') {
+            throw new Error('Camera or microphone permission denied. Please allow access in your browser settings.');
+          } else if (mediaError.name === 'NotFoundError' || mediaError.name === 'DevicesNotFoundError') {
+            throw new Error('No camera or microphone found. Please connect a device and try again.');
+          } else {
+            throw new Error(`Media device error: ${mediaError.message}`);
+          }
+        }
+
         // Load ZegoCloud SDK dynamically
-        const { ZegoExpressEngine } = await import('zego-express-engine-webrtc');
+        const { ZegoExpressEngine } = await import('zego-express-engine-webrtc')
+          .catch(e => {
+            console.error('Failed to load ZegoCloud SDK:', e);
+            throw new Error('Failed to load video call service. Please check your internet connection.');
+          });
         
         // Create the Zego instance if it doesn't exist
         if (!zegoRef.current) {
+          console.log('Requesting token for session:', sessionId, 'room:', roomId);
+          
           // Get the token from the server
           const tokenResponse = await fetch('/api/sessions/token', {
             method: 'POST',
@@ -51,33 +81,52 @@ export const VideoCallInterface: React.FC<VideoCallInterfaceProps> = ({
           });
           
           if (!tokenResponse.ok) {
-            const error = await tokenResponse.json();
-            throw new Error(error.error || 'Failed to get token');
+            const errorData = await tokenResponse.json();
+            console.error('Token response error:', errorData);
+            throw new Error(errorData.error || errorData.details || 'Failed to get authentication token');
           }
           
           const tokenData = await tokenResponse.json();
-          console.log('Token received:', tokenData);
+          console.log('Token received successfully');
           
           if (!tokenData.success || !tokenData.token) {
-            throw new Error('Invalid token response from server');
+            console.error('Invalid token response:', tokenData);
+            throw new Error('Invalid authentication response from server');
           }
           
           const { token, appID, userId, username } = tokenData;
           
           // Initialize ZegoCloud
+          console.log(`Initializing ZegoCloud with appID: ${appID}`);
           zegoRef.current = new ZegoExpressEngine(appID, 'production');
           
-          // Create a stream
-          await zegoRef.current.loginRoom(roomId, token, { userID: userId, userName: username });
+          // Log into the room with the token
+          console.log(`Logging into room: ${roomId}`);
+          await zegoRef.current.loginRoom(roomId, token, { userID: userId, userName: username })
+            .catch(e => {
+              console.error('Room login error:', e);
+              throw new Error(`Failed to connect to video room: ${e.message}`);
+            });
           
-          // Bind events
-          zegoRef.current.on('roomStateUpdate', (roomID: string, state: string) => {
-            console.log(`Room state updated: ${roomID}, state: ${state}`);
+          // Bind events with better error handling
+          zegoRef.current.on('roomStateUpdate', (roomID: string, state: string, errorCode: number, extendedData: string) => {
+            console.log(`Room state updated: ${roomID}, state: ${state}, errorCode: ${errorCode}`);
             setIsConnected(state === 'CONNECTED');
+            
+            if (errorCode !== 0) {
+              console.error(`Room error: ${errorCode}, data: ${extendedData}`);
+              // Don't set error state here, just log it to avoid interruption
+            }
           });
           
           zegoRef.current.on('roomUserUpdate', (roomID: string, updateType: string, userList: any[]) => {
             console.log(`User update in room ${roomID}: ${updateType}`, userList);
+            
+            // Show toast or UI indicator when another user joins/leaves
+            if (userList.length > 0) {
+              const userAction = updateType === 'ADD' ? 'joined' : 'left';
+              console.log(`User ${userList[0].userName} has ${userAction} the session`);
+            }
           });
           
           zegoRef.current.on('roomStreamUpdate', async (roomID: string, updateType: string, streamList: any[]) => {
@@ -87,12 +136,18 @@ export const VideoCallInterface: React.FC<VideoCallInterfaceProps> = ({
               // Play remote streams when they arrive
               for (const stream of streamList) {
                 if (remoteVideoRef.current) {
-                  await zegoRef.current.startPlayingStream(
-                    stream.streamID,
-                    {
-                      container: remoteVideoRef.current
-                    }
-                  );
+                  console.log(`Playing remote stream: ${stream.streamID}`);
+                  try {
+                    await zegoRef.current.startPlayingStream(
+                      stream.streamID,
+                      {
+                        container: remoteVideoRef.current
+                      }
+                    );
+                  } catch (playError) {
+                    console.error(`Error playing stream ${stream.streamID}:`, playError);
+                    // Don't throw here, just log the error to avoid interrupting the session
+                  }
                 }
               }
             }
@@ -100,20 +155,29 @@ export const VideoCallInterface: React.FC<VideoCallInterfaceProps> = ({
           
           // Start local preview for video calls
           if (sessionType === 'video' && localVideoRef.current) {
+            console.log('Starting local video preview');
             await zegoRef.current.startPreview({
               container: localVideoRef.current
+            }).catch(e => {
+              console.error('Preview error:', e);
+              // Don't throw here to allow audio-only fallback
             });
           }
           
           // Publish stream
           const streamID = `${roomId}_${userId}`;
+          console.log(`Publishing stream: ${streamID}`);
           await zegoRef.current.startPublishingStream(streamID, {
             camera: {
               video: sessionType === 'video',
               audio: true
             }
+          }).catch(e => {
+            console.error('Publishing error:', e);
+            throw new Error(`Failed to start streaming: ${e.message}`);
           });
           
+          console.log('ZegoCloud initialized successfully');
           setIsLoading(false);
         }
       } catch (err: any) {
@@ -123,12 +187,14 @@ export const VideoCallInterface: React.FC<VideoCallInterfaceProps> = ({
         let errorMessage = err.message || 'Failed to initialize the video call';
         
         // Add more specific error messaging
-        if (errorMessage.includes('Permission denied')) {
+        if (errorMessage.includes('Permission denied') || errorMessage.includes('NotAllowedError')) {
           errorMessage = 'Camera or microphone permission denied. Please allow access in your browser settings.';
-        } else if (errorMessage.includes('network')) {
+        } else if (errorMessage.includes('network') || errorMessage.includes('connection')) {
           errorMessage = 'Network connection error. Please check your internet connection and try again.';
-        } else if (errorMessage.includes('token')) {
+        } else if (errorMessage.includes('token') || errorMessage.includes('authentication')) {
           errorMessage = 'Authentication failed. Please try refreshing the page or contact support.';
+        } else if (errorMessage.includes('NotFoundError') || errorMessage.includes('DevicesNotFoundError')) {
+          errorMessage = 'No camera or microphone found. Please connect a device and try again.';
         }
         
         setError(errorMessage);
