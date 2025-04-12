@@ -402,32 +402,34 @@ router.get('/orders', authenticate, async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'User not authenticated' });
     }
     
-    const orders = await mongodb.Order.find({ userId: req.user.id })
-      .sort({ createdAt: -1 })
-      .lean();
+    // Get orders for the user using PostgreSQL
+    const userOrders = await storage.getOrdersByUser(req.user.id);
     
-    // Populate product details
-    const ordersWithProducts = await Promise.all(
-      orders.map(async (order) => {
-        const productIds = order.items.map(item => item.productId);
-        const products = await mongodb.Product.find({ _id: { $in: productIds } }).lean();
+    // For each order, get the order items and products
+    const ordersWithItems = await Promise.all(
+      userOrders.map(async (order) => {
+        // Get order items for this order
+        const orderItems = await storage.getOrderItems(order.id);
         
-        const itemsWithProducts = order.items.map(item => {
-          const product = products.find(p => p._id.toString() === item.productId.toString());
-          return {
-            ...item,
-            product,
-          };
-        });
+        // Get products for each order item
+        const itemsWithProducts = await Promise.all(
+          orderItems.map(async (item) => {
+            const product = await storage.getProduct(item.productId);
+            return {
+              ...item,
+              product
+            };
+          })
+        );
         
         return {
           ...order,
-          items: itemsWithProducts,
+          items: itemsWithProducts
         };
       })
     );
     
-    return res.status(200).json(ordersWithProducts);
+    return res.status(200).json(ordersWithItems);
   } catch (error: any) {
     log(`Error fetching orders: ${error.message}`, 'error');
     return res.status(500).json({ error: 'Failed to fetch orders', details: error.message });
@@ -439,30 +441,47 @@ router.get('/orders', authenticate, async (req: Request, res: Response) => {
  */
 router.get('/admin/orders', authenticate, adminOnly, async (req: Request, res: Response) => {
   try {
-    const orders = await mongodb.Order.find()
-      .sort({ createdAt: -1 })
-      .lean();
+    // Get all orders using PostgreSQL - there's no direct "get all" method in
+    // the storage interface, so we'll use a workaround by getting all users first
+    const allUsers = await storage.getAllUsers();
+    const userIds = allUsers.map(user => user.id);
     
-    // Populate user and product details
+    // Collect orders for all users
+    let allOrders: any[] = [];
+    for (const userId of userIds) {
+      const userOrders = await storage.getOrdersByUser(userId);
+      allOrders = [...allOrders, ...userOrders];
+    }
+    
+    // Sort orders by creation date (newest first)
+    allOrders.sort((a, b) => {
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    });
+    
+    // For each order, get order items, products, and user details
     const ordersWithDetails = await Promise.all(
-      orders.map(async (order) => {
-        const user = await mongodb.User.findById(order.userId).lean();
+      allOrders.map(async (order) => {
+        // Get user details
+        const user = await storage.getUser(order.userId);
         
-        const productIds = order.items.map(item => item.productId);
-        const products = await mongodb.Product.find({ _id: { $in: productIds } }).lean();
+        // Get order items
+        const orderItems = await storage.getOrderItems(order.id);
         
-        const itemsWithProducts = order.items.map(item => {
-          const product = products.find(p => p._id.toString() === item.productId.toString());
-          return {
-            ...item,
-            product,
-          };
-        });
+        // Get products for each order item
+        const itemsWithProducts = await Promise.all(
+          orderItems.map(async (item) => {
+            const product = await storage.getProduct(item.productId);
+            return {
+              ...item,
+              product
+            };
+          })
+        );
         
         return {
           ...order,
           user,
-          items: itemsWithProducts,
+          items: itemsWithProducts
         };
       })
     );
