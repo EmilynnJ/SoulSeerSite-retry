@@ -2,9 +2,9 @@
  * Script to create test user accounts for SoulSeer application
  * directly using mongodb without the HTTP endpoint
  */
-require('dotenv').config();
-const mongoose = require('mongoose');
-const bcrypt = require('bcrypt');
+import 'dotenv/config';
+import mongoose from 'mongoose';
+import bcrypt from 'bcrypt';
 const SALT_ROUNDS = 10;
 
 // MongoDB connection string
@@ -25,7 +25,7 @@ async function connectToDatabase() {
       maxIdleTimeMS: 120000,
       retryWrites: true,
       retryReads: true,
-      bufferCommands: false,
+      // Buffer commands enabled by default
     });
     console.log('MongoDB Atlas connection successful');
     return mongoose.connection;

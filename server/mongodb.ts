@@ -50,8 +50,7 @@ export async function connectToDatabase() {
           minPoolSize: 1,                 // Minimum connections
           maxIdleTimeMS: 120000,          // Longer idle time
           retryWrites: true,              // Retry write operations
-          retryReads: true,               // Retry read operations
-          bufferCommands: false,          // Don't buffer commands when disconnected
+          retryReads: true                // Retry read operations
         });
         
         log(`MongoDB Atlas connection successful in ${Date.now() - startTime}ms`, 'database');
