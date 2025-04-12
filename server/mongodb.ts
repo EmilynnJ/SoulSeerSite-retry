@@ -40,15 +40,14 @@ export async function connectToDatabase() {
       const startTime = Date.now();
       try {
         // Connect to MongoDB Atlas with robust connection parameters
+        // Connect with standard parameters only
         await mongoose.connect(uri, {
-          serverSelectionTimeoutMS: 60000, // Increased timeout for server selection
-          connectTimeoutMS: 60000,        // Increased timeout for initial connection
-          socketTimeoutMS: 120000,        // Increased timeout for socket operations
+          serverSelectionTimeoutMS: 120000, // Increased timeout for server selection
+          connectTimeoutMS: 120000,        // Increased timeout for initial connection
+          socketTimeoutMS: 180000,        // Increased timeout for socket operations
           family: 4,                      // Force IPv4 (helps with Replit connectivity)
-          heartbeatFrequencyMS: 30000,    // More frequent heartbeats for stability
-          maxPoolSize: 5,                 // Reduced pool size to prevent overloading
-          minPoolSize: 1,                 // Minimum connections
-          maxIdleTimeMS: 120000,          // Longer idle time
+          maxPoolSize: 10,                // Increased pool size for more connections
+          minPoolSize: 2,                 // Minimum connections
           retryWrites: true,              // Retry write operations
           retryReads: true                // Retry read operations
         });
