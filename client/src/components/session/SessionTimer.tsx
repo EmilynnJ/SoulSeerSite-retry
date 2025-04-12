@@ -222,16 +222,38 @@ export const SessionTimer: React.FC<SessionTimerProps> = ({
     };
   }, [isRunning]);
   
-  // Session update effect (every minute)
+  // Session update effect (heartbeat every 30 seconds)
   const updateSessionData = useCallback(() => {
-    if (isRunning && elapsedSeconds > 0 && elapsedSeconds % 60 === 0) {
+    if (isRunning && elapsedSeconds > 0 && elapsedSeconds % 30 === 0) {
+      console.log(`Sending session heartbeat at ${elapsedSeconds} seconds`);
       updateSession();
     }
-  }, [elapsedSeconds, isRunning, updateSession]);
+    
+    // Also check if we're approaching time limit
+    if (remainingMinutes <= 1 && !needsExtension && !showExtendOptions) {
+      setNeedsExtension(true);
+      setShowExtendOptions(true);
+      toast({
+        title: 'Session time running low',
+        description: 'Less than 1 minute remaining. Please extend your session.',
+        variant: 'warning',
+      });
+    }
+  }, [elapsedSeconds, isRunning, updateSession, remainingMinutes, needsExtension, showExtendOptions, toast]);
   
   useEffect(() => {
     updateSessionData();
   }, [elapsedSeconds, updateSessionData]);
+  
+  // Initial update on component mount
+  useEffect(() => {
+    // Update session after 3 seconds to establish connection
+    const initialTimer = setTimeout(() => {
+      updateSession();
+    }, 3000);
+    
+    return () => clearTimeout(initialTimer);
+  }, []);
   
   // Handle pause/resume
   const toggleRunning = () => {

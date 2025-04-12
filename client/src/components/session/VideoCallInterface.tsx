@@ -46,6 +46,7 @@ export const VideoCallInterface: React.FC<VideoCallInterfaceProps> = ({
           const tokenResponse = await fetch('/api/sessions/token', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
             body: JSON.stringify({ sessionId, roomId })
           });
           
@@ -54,7 +55,14 @@ export const VideoCallInterface: React.FC<VideoCallInterfaceProps> = ({
             throw new Error(error.error || 'Failed to get token');
           }
           
-          const { token, appID, userId, username } = await tokenResponse.json();
+          const tokenData = await tokenResponse.json();
+          console.log('Token received:', tokenData);
+          
+          if (!tokenData.success || !tokenData.token) {
+            throw new Error('Invalid token response from server');
+          }
+          
+          const { token, appID, userId, username } = tokenData;
           
           // Initialize ZegoCloud
           zegoRef.current = new ZegoExpressEngine(appID, 'production');
@@ -110,7 +118,20 @@ export const VideoCallInterface: React.FC<VideoCallInterfaceProps> = ({
         }
       } catch (err: any) {
         console.error('Failed to initialize ZegoCloud:', err);
-        setError(err.message || 'Failed to initialize the video call');
+        
+        // Detailed error information
+        let errorMessage = err.message || 'Failed to initialize the video call';
+        
+        // Add more specific error messaging
+        if (errorMessage.includes('Permission denied')) {
+          errorMessage = 'Camera or microphone permission denied. Please allow access in your browser settings.';
+        } else if (errorMessage.includes('network')) {
+          errorMessage = 'Network connection error. Please check your internet connection and try again.';
+        } else if (errorMessage.includes('token')) {
+          errorMessage = 'Authentication failed. Please try refreshing the page or contact support.';
+        }
+        
+        setError(errorMessage);
         setIsLoading(false);
       }
     };
