@@ -331,9 +331,8 @@ export class ShopStripeService {
         status: 'completed',
         totalAmount: totalAmount,
         stripeSessionId: session.id,
-        stripePaymentIntentId: session.payment_intent as string,
-        createdAt: new Date(),
-        updatedAt: new Date()
+        stripePaymentIntentId: session.payment_intent as string
+        // createdAt and updatedAt will be set automatically by the database
       });
       
       // Create order item for the product
@@ -341,9 +340,8 @@ export class ShopStripeService {
         orderId: order.id,
         productId: productIdNum,
         quantity: 1,
-        price: totalAmount,
-        name: '', // This will be filled by joining with product data
-        imageUrl: '' // This will be filled by joining with product data
+        price: totalAmount
+        // The product details will be joined when retrieving the order
       });
       
       // Update product inventory if needed
