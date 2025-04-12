@@ -116,7 +116,7 @@ app.use((req, res, next) => {
   
   // Initialize the Chat service with the HTTP server
   try {
-    const { chatService } = await import('./services/chat-service');
+    const { chatService } = await import('./services/chat-service2');
     chatService.initialize(server);
     console.log('Chat service initialized successfully');
   } catch (error) {
@@ -128,8 +128,13 @@ app.use((req, res, next) => {
     const { livestreamService } = await import('./services/livestream-service');
     livestreamService.initialize(server);
     console.log('Livestream service initialized successfully');
+    
+    // Initialize the Livestream Gifting service
+    const { livestreamGiftingService } = await import('./services/livestream-gifting-service');
+    livestreamGiftingService.initialize(server);
+    console.log('Livestream Gifting service initialized successfully');
   } catch (error) {
-    console.error('Failed to initialize Livestream service:', error);
+    console.error('Failed to initialize Livestream services:', error);
   }
 
   // Initialize the daily reader payout scheduler

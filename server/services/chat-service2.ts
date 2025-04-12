@@ -23,7 +23,7 @@ interface ChatMessage {
 interface ChatRoom {
   id: string;
   sessionId: string;
-  clients: Map<string, WebSocket>;
+  clients: Map<string, WebSocket.WebSocket>;
   messages: ChatMessage[];
 }
 
@@ -35,18 +35,25 @@ class ChatService {
   public initialize(server: HttpServer): void {
     log('Initializing chat WebSocket service');
     
-    // Create WebSocket server
-    this.wss = new WebSocket.Server({ 
-      server,
-      path: '/ws/chat'
-    } as WebSocket.ServerOptions);
-    
-    this.wss.on('connection', this.handleConnection.bind(this));
-    
-    log('Chat WebSocket service initialized');
+    try {
+      // Create WebSocket server
+      this.wss = new WebSocket.Server({ 
+        server,
+        path: '/ws/chat'
+      });
+      
+      this.wss.on('connection', (ws: WebSocket.WebSocket, request: any) => {
+        this.handleConnection(ws, request);
+      });
+      
+      log('Chat WebSocket service initialized');
+    } catch (error) {
+      log(`Failed to initialize chat service: ${error}`, 'error');
+      throw error;
+    }
   }
   
-  private async handleConnection(ws: WebSocket, request: any): Promise<void> {
+  private async handleConnection(ws: WebSocket.WebSocket, request: any): Promise<void> {
     try {
       // Extract room ID from the URL
       const url = new URL(request.url, `http://${request.headers.host}`);
@@ -89,7 +96,9 @@ class ChatService {
         // Find client ID for this connection and remove from room
         const room = this.getRoom(roomId);
         if (room) {
-          for (const [clientId, clientWs] of room.clients.entries()) {
+          // Convert Map.entries() to array for compatibility
+          const entries = Array.from(room.clients.entries());
+          for (const [clientId, clientWs] of entries) {
             if (clientWs === ws) {
               this.removeClientFromRoom(clientId, roomId);
               break;
@@ -103,7 +112,7 @@ class ChatService {
     }
   }
   
-  private async handleJoin(ws: WebSocket, message: ChatMessage, roomId: string): Promise<void> {
+  private async handleJoin(ws: WebSocket.WebSocket, message: ChatMessage, roomId: string): Promise<void> {
     try {
       const { sessionId, userId, userName } = message;
       
@@ -145,7 +154,7 @@ class ChatService {
     }
   }
   
-  private async handleMessage(ws: WebSocket, message: ChatMessage, roomId: string): Promise<void> {
+  private async handleMessage(ws: WebSocket.WebSocket, message: ChatMessage, roomId: string): Promise<void> {
     try {
       const { sessionId, senderId, senderName, content } = message;
       
@@ -240,7 +249,7 @@ class ChatService {
     }
   }
   
-  private sendMessageHistory(ws: WebSocket, room: ChatRoom): void {
+  private sendMessageHistory(ws: WebSocket.WebSocket, room: ChatRoom): void {
     const historyMessage: ChatMessage = {
       type: 'history',
       messages: room.messages
@@ -256,7 +265,7 @@ class ChatService {
       const messageStr = JSON.stringify(message);
       
       room.clients.forEach((client) => {
-        if (client.readyState === WebSocket.OPEN) {
+        if (client.readyState === WebSocket.WebSocket.OPEN) {
           client.send(messageStr);
         }
       });
@@ -273,14 +282,14 @@ class ChatService {
     this.broadcastMessage(roomId, message);
   }
   
-  private sendError(ws: WebSocket, content: string): void {
+  private sendError(ws: WebSocket.WebSocket, content: string): void {
     const errorMessage: ChatMessage = {
       type: 'error',
       content,
       timestamp: new Date().toISOString()
     };
     
-    if (ws.readyState === WebSocket.OPEN) {
+    if (ws.readyState === WebSocket.WebSocket.OPEN) {
       ws.send(JSON.stringify(errorMessage));
     }
   }
