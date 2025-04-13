@@ -1,0 +1,60 @@
+==> Downloading cache...
+==> Transferred 247MB in 8s. Extraction took 6s.
+==> Using Node.js version 22.12.0 (default)
+==> Docs on specifying a Node.js version: https://render.com/docs/node-version
+==> Using Bun version 1.1.0 (default)
+==> Docs on specifying a bun version: https://render.com/docs/bun-version
+==> Running build command 'npm install; npm run build'...
+added 99 packages, changed 5 packages, and audited 708 packages in 7s
+86 packages are looking for funding
+  run `npm fund` for details
+6 moderate severity vulnerabilities
+To address issues that do not require attention, run:
+  npm audit fix
+To address all issues (including breaking changes), run:
+  npm audit fix --force
+Run `npm audit` for details.
+> rest-express@1.0.0 build
+> vite build && esbuild server/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist
+vite v5.4.17 building for production...
+transforming...
+Browserslist: browsers data (caniuse-lite) is 6 months old. Please run:
+  npx update-browserslist-db@latest
+  Why you should do it regularly: https://github.com/browserslist/update-db#readme
+node_modules/@protobufjs/inquire/index.js (12:18): Use of eval in "node_modules/@protobufjs/inquire/index.js" is strongly discouraged as it poses security risks and may cause issues with minification.
+✓ 2526 modules transformed.
+[plugin:vite:reporter] [plugin vite:reporter] 
+(!) /opt/render/project/src/client/src/hooks/websocket-provider.tsx is dynamically imported by /opt/render/project/src/client/src/pages/livestream-detail-page.tsx, /opt/render/project/src/client/src/pages/livestream-detail-page.tsx but also statically imported by /opt/render/project/src/client/src/App.tsx, /opt/render/project/src/client/src/pages/readers-page.tsx, dynamic import will not move module into another chunk.
+rendering chunks...
+computing gzip size...
+../dist/public/index.html                                8.78 kB │ gzip:   1.69 kB
+../dist/public/assets/index-0KppM11O.css               101.40 kB │ gzip:  17.06 kB
+../dist/public/assets/index-Djd4AcrI.js                955.77 kB │ gzip: 277.76 kB
+../dist/public/assets/ZegoExpressWebRTC-Bg5IiSU2.js  2,099.48 kB │ gzip: 638.28 kB
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 13.66s
+▲ [WARNING] The CommonJS "module" variable is treated as a global variable in an ECMAScript module and may not work as expected [commonjs-variable-in-esm]
+    server/services/livekit-service.js:72:0:
+      72 │ module.exports = {
+         ╵ ~~~~~~
+  This file is considered to be an ECMAScript module because the enclosing "package.json" file sets the type of this file to "module":
+    package.json:5:10:
+      5 │   "type": "module",
+        ╵           ~~~~~~~~
+  Node's package format requires that CommonJS files in a "type": "module" package use the ".cjs" file extension.
+▲ [WARNING] Import "accounts" will always be undefined because there is no matching export in "server/services/stripe-client.ts" [import-is-undefined]
+    server/routes.ts:2067:43:
+      2067 │         const account = await stripeClient.accounts.create({
+           ╵                                            ~~~~~~~~
+▲ [WARNING] Import "accountLinks" will always be undefined because there is no matching export in "server/services/stripe-client.ts" [import-is-undefined]
+    server/routes.ts:2091:45:
+      2091 │       const accountLink = await stripeClient.accountLinks.create({
+           ╵                                              ~~~~~~~~~~~~
+▲ [WARNING] Import "customers" will always be undefined because there is no matching export in "server/services/stripe-client.ts" [import-is-undefined]
+    server/routes.ts:2370:46:
+      2370 │           const customer = await stripeClient.customers.create({
+           ╵                                               ~~~~~~~~~
+▲ [WARNING] Import "paymentIntents" will always be undefined because there is no matching export in "server/services/stripe-client.ts" [import-is-undefined]

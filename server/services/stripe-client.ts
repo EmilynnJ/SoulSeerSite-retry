@@ -322,6 +322,7 @@ export async function syncProductWithStripe(product: {
   }
 }
 
+// Export a wrapped version of the stripe client with properly typed methods
 export default {
   createPaymentIntent,
   updatePaymentIntent,
@@ -331,11 +332,11 @@ export default {
   createOnDemandReadingPayment,
   fetchStripeProducts,
   syncProductWithStripe,
-  // Export Stripe's native clients for direct access
-  accounts: stripe.accounts,
-  accountLinks: stripe.accountLinks,
-  customers: stripe.customers,
-  paymentIntents: stripe.paymentIntents,
-  prices: stripe.prices,
-  products: stripe.products
+  stripe,
+  get accounts() { return getStripeClient().accounts; },
+  get accountLinks() { return getStripeClient().accountLinks; },
+  get customers() { return getStripeClient().customers; },
+  get paymentIntents() { return getStripeClient().paymentIntents; },
+  get prices() { return getStripeClient().prices; },
+  get products() { return getStripeClient().products; }
 };
