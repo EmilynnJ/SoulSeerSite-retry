@@ -28,10 +28,11 @@ import createMemoryStore from "memorystore";
 import connectPgSimple from "connect-pg-simple";
 import { db, pool } from "./db";
 import { eq, and, or, desc, isNull, asc, sql, count } from "drizzle-orm";
-import { log } from './server-only';
+import { log } from "./server-only";
 
-const MemoryStore = createMemoryStore(session);
+// Initialize stores
 const PostgresSessionStore = connectPgSimple(session);
+const MemoryStore = createMemoryStore(session); // For fallback in case of errors
 
 // Define SessionStore type - using any to bypass strict typing issues with session stores
 type SessionStore = any;
@@ -165,20 +166,75 @@ export class PostgresStorage implements IStorage {
   sessionStore: SessionStore;
   
   constructor() {
-    // Use in-memory session store for development to avoid PostgreSQL session conflicts
-    const sessionConfig = {
-      // For production, consider using the PostgreSQL store with careful configuration
-      // pool,
-      // tableName: 'user_sessions', 
-      // createTableIfMissing: false
-    };
+    // Use PostgreSQL session store for persistent sessions across restarts
+    // We need to customize the table creation to avoid conflicts
     
-    // Use memory store instead of PostgreSQL to avoid table creation conflicts
-    this.sessionStore = new MemoryStore({
-      checkPeriod: 86400000 // Prune expired entries every 24h
-    });
-    
-    log('Using in-memory session store to avoid PostgreSQL table conflicts', 'storage');
+    try {
+      // Check if the table already exists before creating it
+      const setupSessionTable = async () => {
+        try {
+          const checkTableQuery = `
+            SELECT EXISTS (
+              SELECT FROM information_schema.tables 
+              WHERE table_schema = 'public' 
+              AND table_name = 'user_sessions'
+            );
+          `;
+          
+          const result = await pool.query(checkTableQuery);
+          const tableExists = result.rows[0].exists;
+          log(`Session table check: ${tableExists ? 'exists' : 'does not exist'}`, 'storage');
+          
+          if (!tableExists) {
+            // Create the table manually with our preferred schema instead of letting the library do it
+            const createTableQuery = `
+              CREATE TABLE IF NOT EXISTS "user_sessions" (
+                "sid" varchar NOT NULL COLLATE "default",
+                "sess" json NOT NULL,
+                "expire" timestamp(6) NOT NULL,
+                CONSTRAINT "user_sessions_pkey" PRIMARY KEY ("sid")
+              );
+              CREATE INDEX IF NOT EXISTS "IDX_user_sessions_expire" ON "user_sessions" ("expire");
+            `;
+            
+            await pool.query(createTableQuery);
+            log('Session table created successfully', 'storage');
+          }
+          
+          log('Session table setup complete', 'storage');
+          
+          // Initialize PostgreSQL session store
+          this.sessionStore = new PostgresSessionStore({
+            pool,
+            tableName: 'user_sessions',
+            createTableIfMissing: false // Important: we manually create the table
+          });
+          
+          log('Using PostgreSQL session store with manual table creation', 'storage');
+        } catch (error) {
+          log(`Error in PostgreSQL session table setup: ${error}`, 'storage');
+          throw error;
+        }
+      };
+      
+      // Start the async setup process
+      setupSessionTable().catch(err => {
+        log(`CRITICAL ERROR: Failed to initialize PostgreSQL session store: ${err}`, 'storage');
+        log('Falling back to MemoryStore for sessions (data will be lost on restart)', 'storage');
+        
+        // Fallback to memory store if PostgreSQL setup fails
+        this.sessionStore = new MemoryStore({
+          checkPeriod: 86400000 // Prune expired entries every 24h
+        });
+      });
+    } catch (err) {
+      log(`Unexpected error in session store initialization: ${err}`, 'storage');
+      
+      // Ultimate fallback - always ensure we have a session store
+      this.sessionStore = new MemoryStore({
+        checkPeriod: 86400000 // Prune expired entries every 24h
+      });
+    }
   }
   
   // User methods
