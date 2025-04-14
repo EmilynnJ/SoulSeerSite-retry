@@ -7,6 +7,8 @@ import readingRouter from "./routes/readings";
 import sessionsRouter from "./routes/sessions";
 import adminRouter from "./routes/admin";
 import { createForumRouter } from "./routes/forum-pg";
+import availabilityRouter from "./routes/availability";
+import appointmentsRouter from "./routes/appointments";
 import { z } from "zod";
 import { scrypt, randomBytes, timingSafeEqual } from "crypto";
 import { promisify } from "util";
