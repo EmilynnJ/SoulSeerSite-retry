@@ -80,6 +80,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Register API routes
   app.use('/api/sessions', sessionsRouter);
   app.use('/api/admin', adminRouter);
+  app.use('/api/readers/availability', availabilityRouter);
+  app.use('/api/appointments', appointmentsRouter);
   
   // Register forum routes with PostgreSQL implementation
   const forumRouter = createForumRouter(storage);
