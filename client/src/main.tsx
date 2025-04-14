@@ -17,9 +17,8 @@ const registerServiceWorker = () => {
   }
 };
 
-// Register service worker for production environments
-if (import.meta.env.PROD) {
-  registerServiceWorker();
-}
+// Register service worker for both production and development environments
+// This ensures PWA functionality is testable in development
+registerServiceWorker();
 
 createRoot(document.getElementById("root")!).render(<App />);

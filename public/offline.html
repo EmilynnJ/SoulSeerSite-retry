@@ -3,134 +3,129 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SoulSeer - Offline</title>
+  <title>SoulSeer - You're Offline</title>
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#7f2474">
+  <link rel="icon" href="/icons/icon-192x192.png">
   <style>
-    :root {
-      --primary: #7f2474;
-      --background: #2c0f27;
-      --foreground: #ffffff;
-      --muted: #f3e8f2;
-      --muted-foreground: #a288a1;
-      --border: #3e1a39;
-      --radius: 0.5rem;
-    }
-    
-    * {
+    body {
       margin: 0;
       padding: 0;
-      box-sizing: border-box;
-    }
-    
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      background-color: var(--background);
-      color: var(--foreground);
+      font-family: 'Arial', sans-serif;
+      background: #2c0f27;
+      color: #f8f0ff;
       min-height: 100vh;
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      padding: 1rem;
       text-align: center;
+      background-image: radial-gradient(circle, #7f2474 0%, #2c0f27 70%);
     }
-    
     .container {
       max-width: 500px;
+      margin: 0 auto;
       padding: 2rem;
-      border-radius: var(--radius);
-      background-color: rgba(255, 255, 255, 0.05);
+      background-color: rgba(0, 0, 0, 0.3);
+      border-radius: 1rem;
       backdrop-filter: blur(10px);
-      border: 1px solid var(--border);
+      border: 1px solid rgba(255, 255, 255, 0.1);
     }
-    
-    .logo {
-      margin-bottom: 1.5rem;
-      font-size: 2rem;
-      font-weight: bold;
-      color: var(--primary);
-    }
-    
     h1 {
+      font-size: 2rem;
       margin-bottom: 1rem;
-      font-size: 1.8rem;
+      color: #d4a0ff;
     }
-    
     p {
+      font-size: 1.2rem;
       margin-bottom: 1.5rem;
-      color: var(--muted-foreground);
       line-height: 1.6;
     }
-    
-    .button {
-      display: inline-block;
-      background-color: var(--primary);
-      color: white;
-      padding: 0.75rem 1.5rem;
-      text-decoration: none;
-      border-radius: var(--radius);
-      font-weight: 500;
-      border: none;
-      cursor: pointer;
-      transition: opacity 0.2s;
-    }
-    
-    .button:hover {
-      opacity: 0.9;
-    }
-    
-    .icon {
-      margin-bottom: 1.5rem;
-      font-size: 3rem;
-    }
-    
-    .crystal-ball {
-      width: 80px;
-      height: 80px;
-      margin: 0 auto 1.5rem;
+    .logo {
+      width: 120px;
+      height: 120px;
+      margin-bottom: 2rem;
       border-radius: 50%;
-      background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.4), rgba(127, 36, 116, 0.8));
-      box-shadow: 
-        0 0 20px rgba(127, 36, 116, 0.5),
-        inset 0 0 10px rgba(255, 255, 255, 0.3);
-      position: relative;
+      border: 3px solid #d4a0ff;
+      padding: 5px;
+      object-fit: cover;
     }
-    
-    .crystal-ball::after {
-      content: '';
+    .cosmic-stars {
       position: absolute;
-      top: 20%;
-      left: 25%;
-      width: 20%;
-      height: 10%;
-      background-color: rgba(255, 255, 255, 0.7);
-      border-radius: 50%;
-      transform: rotate(30deg);
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: -1;
+      overflow: hidden;
     }
-    
-    @media (max-width: 600px) {
-      .container {
-        padding: 1.5rem;
-      }
-      
-      h1 {
-        font-size: 1.5rem;
-      }
+    .star {
+      position: absolute;
+      background-color: white;
+      border-radius: 50%;
+      opacity: 0.3;
+      animation: twinkle 5s infinite;
+    }
+    @keyframes twinkle {
+      0%, 100% { opacity: 0.3; }
+      50% { opacity: 0.8; }
+    }
+    .retry-btn {
+      background-color: #7f2474;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      font-size: 1rem;
+      border-radius: 50px;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      margin-top: 1rem;
+      font-weight: bold;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+    }
+    .retry-btn:hover {
+      background-color: #9e3090;
+      transform: translateY(-2px);
+      box-shadow: 0 6px 15px rgba(0, 0, 0, 0.4);
     }
   </style>
 </head>
 <body>
+  <div class="cosmic-stars" id="stars"></div>
+  
   <div class="container">
-    <div class="logo">SoulSeer</div>
-    <div class="crystal-ball"></div>
-    <h1>You're Currently Offline</h1>
-    <p>
-      It seems you've lost your connection to the cosmic realms. 
-      Please check your internet connection and try again.
-    </p>
-    <p>
-      The spiritual energies will be waiting for you when you reconnect.
-    </p>
-    <button class="button" onclick="window.location.reload()">Try Again</button>
+    <img src="/icons/icon-192x192.png" alt="SoulSeer Logo" class="logo">
+    <h1>You're Offline</h1>
+    <p>Sorry, it looks like you've lost your connection to the cosmic realm. SoulSeer requires an internet connection for psychic readings and spiritual services.</p>
+    <p>Please check your connection and try again when the stars align.</p>
+    <button class="retry-btn" onclick="window.location.reload()">Reconnect</button>
   </div>
+
+  <script>
+    // Create stars for background
+    const starsContainer = document.getElementById('stars');
+    const starsCount = 100;
+    
+    for (let i = 0; i < starsCount; i++) {
+      const star = document.createElement('div');
+      star.className = 'star';
+      
+      // Random size between 1-4px
+      const size = Math.random() * 3 + 1;
+      star.style.width = `${size}px`;
+      star.style.height = `${size}px`;
+      
+      // Random position
+      star.style.left = `${Math.random() * 100}vw`;
+      star.style.top = `${Math.random() * 100}vh`;
+      
+      // Random animation delay
+      star.style.animationDelay = `${Math.random() * 5}s`;
+      
+      starsContainer.appendChild(star);
+    }
+  </script>
 </body>
 </html>

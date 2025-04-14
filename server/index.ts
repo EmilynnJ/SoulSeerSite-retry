@@ -41,14 +41,16 @@ app.use('/uploads', express.static(uploadsPath));
 app.use('/images', express.static(imagesPath));
 
 // Set correct MIME types for manifest.json and serviceWorker.js
-app.get('/manifest.json', (req, res, next) => {
+const publicPath = path.join(process.cwd(), 'public');
+
+app.get('/manifest.json', (req, res) => {
   res.setHeader('Content-Type', 'application/json');
-  next();
+  res.sendFile(path.join(publicPath, 'manifest.json'));
 });
 
-app.get('/serviceWorker.js', (req, res, next) => {
+app.get('/serviceWorker.js', (req, res) => {
   res.setHeader('Content-Type', 'application/javascript');
-  next();
+  res.sendFile(path.join(publicPath, 'serviceWorker.js'));
 });
 
 console.log(`Serving uploads from: ${uploadsPath} with fallback to default images`);
