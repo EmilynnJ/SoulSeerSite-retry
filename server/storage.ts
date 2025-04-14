@@ -188,13 +188,30 @@ export class PostgresStorage implements IStorage {
           if (!tableExists) {
             // Create the table manually with our preferred schema instead of letting the library do it
             const createTableQuery = `
-              CREATE TABLE IF NOT EXISTS "user_sessions" (
-                "sid" varchar NOT NULL COLLATE "default",
-                "sess" json NOT NULL,
-                "expire" timestamp(6) NOT NULL,
-                CONSTRAINT "user_sessions_pkey" PRIMARY KEY ("sid")
-              );
-              CREATE INDEX IF NOT EXISTS "IDX_user_sessions_expire" ON "user_sessions" ("expire");
+              DO $$ 
+              BEGIN
+                IF NOT EXISTS (SELECT FROM pg_tables WHERE tablename = 'user_sessions') THEN
+                  CREATE TABLE "user_sessions" (
+                    "sid" varchar NOT NULL COLLATE "default",
+                    "sess" json NOT NULL,
+                    "expire" timestamp(6) NOT NULL
+                  );
+                  
+                  IF NOT EXISTS (
+                    SELECT constraint_name 
+                    FROM information_schema.table_constraints 
+                    WHERE table_name = 'user_sessions' AND constraint_type = 'PRIMARY KEY'
+                  ) THEN
+                    ALTER TABLE "user_sessions" ADD CONSTRAINT "user_sessions_pkey" PRIMARY KEY ("sid");
+                  END IF;
+                  
+                  IF NOT EXISTS (
+                    SELECT 1 FROM pg_indexes WHERE tablename = 'user_sessions' AND indexname = 'IDX_user_sessions_expire'
+                  ) THEN
+                    CREATE INDEX IF NOT EXISTS "IDX_user_sessions_expire" ON "user_sessions" ("expire");
+                  END IF;
+                END IF;
+              END $$;
             `;
             
             await pool.query(createTableQuery);
