@@ -13,7 +13,36 @@ import { db } from "./db"; // PostgreSQL db reference
 
 declare global {
   namespace Express {
-    interface User extends SelectUser {}
+    // Update User interface to match PostgreSQL schema
+    interface User {
+      id: number;
+      username: string;
+      email: string;
+      password: string;
+      fullName: string | null;
+      role: string;
+      profileImage: string | null;
+      bio: string | null;
+      isVerified: boolean | null;
+      isOnline: boolean | null;
+      isAvailable: boolean | null;
+      stripeCustomerId: string | null;
+      stripeConnectId: string | null;
+      specialties: string[] | null;
+      yearsOfExperience: number | null;
+      rating: number | null;
+      reviewCount: number | null;
+      pricingVideo: number | null;
+      pricingVoice: number | null;
+      pricingChat: number | null;
+      minimumSessionLength: number | null;
+      completedReadings: number | null;
+      totalReadingMinutes: number | null;
+      accountBalance: number | null;
+      lastActive: Date | null;
+      createdAt: Date | null;
+      updatedAt: Date | null;
+    }
   }
 }
 
