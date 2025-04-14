@@ -3,7 +3,7 @@
  * Using Drizzle ORM
  */
 
-import { pgTable, serial, varchar, text, boolean, decimal, integer, timestamp, jsonb } from 'drizzle-orm/pg-core';
+import { pgTable, serial, varchar, text, boolean, decimal, integer, timestamp, jsonb, date, time } from 'drizzle-orm/pg-core';
 import { createInsertSchema } from 'drizzle-zod';
 import { z } from 'zod';
 

@@ -1,245 +1,209 @@
-import express from 'express';
-import { z } from 'zod';
-import { storage } from '../storage';
-import { authGuard } from '../middleware/auth';
-import { insertAppointmentSchema } from '../../shared/schema';
+import express, { Request, Response } from 'express';
+import { IStorage } from '../storage';
+import { AppointmentCreateInput } from '../../shared/schema';
+import { authGuard, readerGuard } from '../middleware/auth';
 
-const router = express.Router();
+export function createAppointmentsRouter(storage: IStorage) {
+  const router = express.Router();
 
-// Get appointments for a specific reader
-router.get('/reader/:readerId', authGuard, async (req, res) => {
-  try {
-    const readerId = parseInt(req.params.readerId);
-    
-    if (isNaN(readerId)) {
-      return res.status(400).json({ message: 'Invalid reader ID' });
-    }
-    
-    // Only allow readers to see their own appointments or admin users
-    if (req.user?.id !== readerId && req.user?.role !== 'admin') {
-      return res.status(403).json({ message: 'Not authorized to view these appointments' });
-    }
-    
-    const appointments = await storage.getAppointmentsByReader(readerId);
-    
-    // For each appointment, get the client name
-    const appointmentsWithClientNames = await Promise.all(appointments.map(async (appointment) => {
-      const client = await storage.getUser(appointment.clientId);
-      return {
-        ...appointment,
-        clientName: client ? `${client.fullName || client.username}` : `Client #${appointment.clientId}`
-      };
-    }));
-    
-    res.status(200).json(appointmentsWithClientNames);
-  } catch (error) {
-    console.error('Error fetching reader appointments:', error);
-    res.status(500).json({ message: 'Failed to fetch appointments' });
-  }
-});
-
-// Get appointments for a specific client
-router.get('/client/:clientId', authGuard, async (req, res) => {
-  try {
-    const clientId = parseInt(req.params.clientId);
-    
-    if (isNaN(clientId)) {
-      return res.status(400).json({ message: 'Invalid client ID' });
-    }
-    
-    // Only allow clients to see their own appointments or admin users
-    if (req.user?.id !== clientId && req.user?.role !== 'admin') {
-      return res.status(403).json({ message: 'Not authorized to view these appointments' });
-    }
-    
-    const appointments = await storage.getAppointmentsByClient(clientId);
-    
-    // For each appointment, get the reader name
-    const appointmentsWithReaderNames = await Promise.all(appointments.map(async (appointment) => {
-      const reader = await storage.getUser(appointment.readerId);
-      return {
-        ...appointment,
-        readerName: reader ? `${reader.fullName || reader.username}` : `Reader #${appointment.readerId}`
-      };
-    }));
-    
-    res.status(200).json(appointmentsWithReaderNames);
-  } catch (error) {
-    console.error('Error fetching client appointments:', error);
-    res.status(500).json({ message: 'Failed to fetch appointments' });
-  }
-});
-
-// Create a new appointment
-router.post('/', authGuard, async (req, res) => {
-  try {
-    const appointmentData = req.body;
-    
-    // Validate request body
-    const appointmentSchema = insertAppointmentSchema.extend({
-      readerId: z.number(),
-      clientId: z.number(),
-      date: z.string(),
-      time: z.string(),
-      type: z.string(),
-      duration: z.number(),
-      notes: z.string().optional()
-    });
-    
+  // Get all appointments
+  router.get('/', authGuard, async (req: Request, res: Response) => {
     try {
-      appointmentSchema.parse(appointmentData);
-    } catch (validationError) {
-      return res.status(400).json({ 
-        message: 'Invalid appointment data', 
-        errors: validationError 
-      });
-    }
-    
-    // Verify the client is making the booking
-    if (req.user?.id !== appointmentData.clientId && req.user?.role !== 'admin') {
-      return res.status(403).json({ message: 'Not authorized to book for this client' });
-    }
-    
-    // Check reader availability for the requested slot
-    const readerId = appointmentData.readerId;
-    const date = appointmentData.date;
-    const startTime = appointmentData.time;
-    
-    // Calculate end time based on duration
-    const calculateEndTime = (start: string, durationMins: number): string => {
-      const [hours, minutes] = start.split(':').map(Number);
-      const totalMinutes = hours * 60 + minutes + durationMins;
-      const endHours = Math.floor(totalMinutes / 60) % 24;
-      const endMinutes = totalMinutes % 60;
-      return `${endHours.toString().padStart(2, '0')}:${endMinutes.toString().padStart(2, '0')}`;
-    };
-    
-    const endTime = calculateEndTime(startTime, appointmentData.duration);
-    
-    // Get day of week from date
-    const dateObj = new Date(date);
-    const dayOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][dateObj.getDay()];
-    
-    // Get reader's availability for that day
-    const availabilityList = await storage.getReaderAvailability(readerId);
-    const dayAvailability = availabilityList.filter(slot => slot.day === dayOfWeek);
-    
-    // Check if requested time is within any available slot
-    const isAvailable = dayAvailability.some(slot => {
-      return startTime >= slot.startTime && endTime <= slot.endTime;
-    });
-    
-    if (!isAvailable) {
-      return res.status(400).json({ message: 'The requested time slot is not available' });
-    }
-    
-    // Check existing appointments for conflicts
-    const appointments = await storage.getAppointmentsByReader(readerId);
-    const hasConflict = appointments.some(appointment => {
-      if (appointment.date !== date || appointment.status === 'canceled') {
-        return false;
+      // Check if filtering by reader or client
+      const readerId = req.query.readerId ? parseInt(req.query.readerId as string) : undefined;
+      const clientId = req.query.clientId ? parseInt(req.query.clientId as string) : undefined;
+      
+      // Get appointments based on filters
+      let appointments;
+      if (readerId) {
+        appointments = await storage.getReaderAppointments(readerId);
+      } else if (clientId) {
+        appointments = await storage.getClientAppointments(clientId);
+      } else {
+        // Only admins can view all appointments
+        if (req.user?.role !== 'admin') {
+          return res.status(403).json({ message: 'Unauthorized' });
+        }
+        appointments = await storage.getAllAppointments();
       }
       
-      const apptStart = appointment.time;
-      const apptDuration = appointment.duration;
-      const apptEnd = calculateEndTime(apptStart, apptDuration);
-      
-      return (startTime < apptEnd && endTime > apptStart);
-    });
-    
-    if (hasConflict) {
-      return res.status(400).json({ message: 'The requested time slot conflicts with an existing appointment' });
+      res.json(appointments);
+    } catch (error) {
+      console.error('Error fetching appointments:', error);
+      res.status(500).json({ message: 'Failed to fetch appointments' });
     }
-    
-    // Create the appointment
-    const appointment = await storage.createAppointment(appointmentData);
-    
-    // Return the created appointment
-    res.status(201).json({ 
-      message: 'Appointment booked successfully',
-      appointment
-    });
-  } catch (error) {
-    console.error('Error creating appointment:', error);
-    res.status(500).json({ message: 'Failed to create appointment' });
-  }
-});
+  });
 
-// Update an appointment
-router.patch('/:id', authGuard, async (req, res) => {
-  try {
-    const appointmentId = parseInt(req.params.id);
-    const updates = req.body;
-    
-    if (isNaN(appointmentId)) {
-      return res.status(400).json({ message: 'Invalid appointment ID' });
-    }
-    
-    // Get the appointment
-    const appointment = await storage.getAppointment(appointmentId);
-    
-    if (!appointment) {
-      return res.status(404).json({ message: 'Appointment not found' });
-    }
-    
-    // Verify user is authorized to update this appointment
-    const isReader = req.user?.id === appointment.readerId;
-    const isClient = req.user?.id === appointment.clientId;
-    const isAdmin = req.user?.role === 'admin';
-    
-    if (!isReader && !isClient && !isAdmin) {
-      return res.status(403).json({ message: 'Not authorized to update this appointment' });
-    }
-    
-    // Update the appointment
-    const updatedAppointment = await storage.updateAppointment(appointmentId, updates);
-    
-    res.status(200).json({ 
-      message: 'Appointment updated successfully',
-      appointment: updatedAppointment
-    });
-  } catch (error) {
-    console.error('Error updating appointment:', error);
-    res.status(500).json({ message: 'Failed to update appointment' });
-  }
-});
+  // Get specific appointment by ID
+  router.get('/:id', authGuard, async (req: Request, res: Response) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) {
+        return res.status(400).json({ message: 'Invalid appointment ID' });
+      }
 
-// Cancel an appointment
-router.post('/:id/cancel', authGuard, async (req, res) => {
-  try {
-    const appointmentId = parseInt(req.params.id);
-    
-    if (isNaN(appointmentId)) {
-      return res.status(400).json({ message: 'Invalid appointment ID' });
-    }
-    
-    // Get the appointment
-    const appointment = await storage.getAppointment(appointmentId);
-    
-    if (!appointment) {
-      return res.status(404).json({ message: 'Appointment not found' });
-    }
-    
-    // Verify user is authorized to cancel this appointment
-    const isReader = req.user?.id === appointment.readerId;
-    const isClient = req.user?.id === appointment.clientId;
-    const isAdmin = req.user?.role === 'admin';
-    
-    if (!isReader && !isClient && !isAdmin) {
-      return res.status(403).json({ message: 'Not authorized to cancel this appointment' });
-    }
-    
-    // Cancel the appointment
-    const canceledAppointment = await storage.cancelAppointment(appointmentId);
-    
-    res.status(200).json({ 
-      message: 'Appointment canceled successfully',
-      appointment: canceledAppointment
-    });
-  } catch (error) {
-    console.error('Error canceling appointment:', error);
-    res.status(500).json({ message: 'Failed to cancel appointment' });
-  }
-});
+      const appointment = await storage.getAppointment(id);
+      if (!appointment) {
+        return res.status(404).json({ message: 'Appointment not found' });
+      }
 
-export default router;
+      // Verify that the user has permission to view this appointment
+      if (req.user?.role !== 'admin' && 
+          req.user?.id !== appointment.readerId && 
+          req.user?.id !== appointment.clientId) {
+        return res.status(403).json({ message: 'Unauthorized' });
+      }
+
+      res.json(appointment);
+    } catch (error) {
+      console.error('Error fetching appointment:', error);
+      res.status(500).json({ message: 'Failed to fetch appointment' });
+    }
+  });
+
+  // Create a new appointment
+  router.post('/', authGuard, async (req: Request, res: Response) => {
+    try {
+      const appointmentData: AppointmentCreateInput = req.body;
+      const clientId = req.user!.id;
+
+      // Validate appointment data
+      if (!appointmentData.readerId || !appointmentData.date || !appointmentData.startTime || !appointmentData.serviceType) {
+        return res.status(400).json({ message: 'Missing required fields for appointment booking' });
+      }
+
+      // Check if the reader exists
+      const reader = await storage.getUser(appointmentData.readerId);
+      if (!reader || reader.role !== 'reader') {
+        return res.status(404).json({ message: 'Reader not found' });
+      }
+
+      // Check if the reader is available at the requested time
+      const isAvailable = await storage.checkReaderAvailability(
+        appointmentData.readerId,
+        appointmentData.date,
+        appointmentData.startTime,
+        appointmentData.duration || 30 // Default to 30 minutes if duration not specified
+      );
+
+      if (!isAvailable) {
+        return res.status(400).json({ message: 'Reader is not available at the requested time' });
+      }
+
+      // Create the appointment
+      const appointment = await storage.createAppointment({
+        ...appointmentData,
+        clientId,
+        status: 'pending'
+      });
+
+      res.status(201).json(appointment);
+    } catch (error) {
+      console.error('Error creating appointment:', error);
+      res.status(500).json({ message: 'Failed to create appointment' });
+    }
+  });
+
+  // Update appointment status (confirm, cancel, reschedule)
+  router.patch('/:id/status', authGuard, async (req: Request, res: Response) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) {
+        return res.status(400).json({ message: 'Invalid appointment ID' });
+      }
+
+      const { status, notes } = req.body;
+      if (!status || !['confirmed', 'cancelled', 'completed', 'no-show'].includes(status)) {
+        return res.status(400).json({ message: 'Invalid status value' });
+      }
+
+      // Get the existing appointment
+      const appointment = await storage.getAppointment(id);
+      if (!appointment) {
+        return res.status(404).json({ message: 'Appointment not found' });
+      }
+
+      // Check if the user has permission to update this appointment
+      // Readers can update appointments they are scheduled for
+      // Clients can only cancel their own appointments
+      if (req.user?.role === 'reader' && req.user.id === appointment.readerId) {
+        // Readers can update to any status
+      } else if (req.user?.id === appointment.clientId) {
+        // Clients can only cancel their own appointments
+        if (status !== 'cancelled') {
+          return res.status(403).json({ message: 'Clients can only cancel appointments' });
+        }
+      } else if (req.user?.role !== 'admin') {
+        return res.status(403).json({ message: 'Unauthorized' });
+      }
+
+      // Update the appointment
+      const updatedAppointment = await storage.updateAppointment(id, { 
+        status,
+        notes: notes || undefined
+      });
+
+      res.json(updatedAppointment);
+    } catch (error) {
+      console.error('Error updating appointment status:', error);
+      res.status(500).json({ message: 'Failed to update appointment status' });
+    }
+  });
+
+  // Reschedule an appointment
+  router.patch('/:id/reschedule', authGuard, async (req: Request, res: Response) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) {
+        return res.status(400).json({ message: 'Invalid appointment ID' });
+      }
+
+      const { date, startTime, duration } = req.body;
+      if (!date || !startTime) {
+        return res.status(400).json({ message: 'New date and start time are required' });
+      }
+
+      // Get the existing appointment
+      const appointment = await storage.getAppointment(id);
+      if (!appointment) {
+        return res.status(404).json({ message: 'Appointment not found' });
+      }
+
+      // Check if the user has permission to reschedule this appointment
+      if (req.user?.role !== 'admin' && 
+          req.user?.id !== appointment.readerId && 
+          req.user?.id !== appointment.clientId) {
+        return res.status(403).json({ message: 'Unauthorized' });
+      }
+
+      // Check if the new time is available
+      const isAvailable = await storage.checkReaderAvailability(
+        appointment.readerId,
+        date,
+        startTime,
+        duration || appointment.duration || 30
+      );
+
+      if (!isAvailable) {
+        return res.status(400).json({ message: 'Reader is not available at the requested time' });
+      }
+
+      // Update the appointment
+      const updatedAppointment = await storage.updateAppointment(id, { 
+        date,
+        startTime,
+        duration: duration || appointment.duration,
+        status: 'confirmed' // Reset status to confirmed when rescheduled
+      });
+
+      res.json(updatedAppointment);
+    } catch (error) {
+      console.error('Error rescheduling appointment:', error);
+      res.status(500).json({ message: 'Failed to reschedule appointment' });
+    }
+  });
+
+  return router;
+}
+
+export default createAppointmentsRouter;
