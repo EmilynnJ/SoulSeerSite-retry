@@ -268,9 +268,8 @@ export function setupAuth(app: Express): void {
           isAvailable: false,
           stripeCustomerId: null,
           stripeConnectId: null,
-          lastActive: new Date(),
-          createdAt: new Date(),
-          updatedAt: new Date()
+          lastActive: new Date()
+          // createdAt and updatedAt are automatically set by the database
         };
         
         const [insertedUser] = await db.insert(users).values(newUser).returning();
