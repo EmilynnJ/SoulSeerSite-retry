@@ -364,6 +364,19 @@ export const insertReaderAvailabilitySchema = createInsertSchema(readerAvailabil
 export type ReaderAvailability = typeof readerAvailability.$inferSelect;
 export type NewReaderAvailability = z.infer<typeof insertReaderAvailabilitySchema>;
 
+// Types for availability management in the UI
+export interface TimeSlot {
+  startTime: string;
+  endTime: string;
+}
+
+export interface DayAvailability {
+  day: string;
+  slots: TimeSlot[];
+}
+
+export type ReaderSchedule = DayAvailability[];
+
 // Scheduled appointments table
 export const appointments = pgTable('appointments', {
   id: serial('id').primaryKey(),
@@ -384,3 +397,13 @@ export const insertAppointmentSchema = createInsertSchema(appointments)
 
 export type Appointment = typeof appointments.$inferSelect;
 export type NewAppointment = z.infer<typeof insertAppointmentSchema>;
+
+// Input types for API endpoints
+export interface AppointmentCreateInput {
+  readerId: number;
+  date: string;
+  startTime: string;
+  serviceType: string;
+  duration?: number;
+  notes?: string;
+}
