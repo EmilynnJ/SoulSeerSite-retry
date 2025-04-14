@@ -54,17 +54,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.log("Attempting login with credentials:", { username: credentials.username, passwordLength: credentials.password.length });
       
       try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+        
         const res = await fetch("/api/login", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(credentials),
-          credentials: "include"
+          credentials: "include",
+          signal: controller.signal
         });
+        
+        clearTimeout(timeoutId);
         
         if (!res.ok) {
           const errorText = await res.text();
           console.error(`Login failed with status ${res.status}: ${errorText}`);
-          throw new Error(errorText || "Authentication failed");
+          throw new Error(errorText || "Invalid username or password");
         }
         
         const userData = await res.json();

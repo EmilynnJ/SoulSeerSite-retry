@@ -46,6 +46,8 @@ export function LoginForm({ onSuccess }: LoginFormProps) {
       }
     } catch (error) {
       console.error("Login failed:", error);
+      // Reset form on error
+      form.reset();
     }
   }
 
