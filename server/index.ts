@@ -40,6 +40,17 @@ const imagesPath = path.join(process.cwd(), 'public', 'images');
 app.use('/uploads', express.static(uploadsPath));
 app.use('/images', express.static(imagesPath));
 
+// Set correct MIME types for manifest.json and serviceWorker.js
+app.get('/manifest.json', (req, res, next) => {
+  res.setHeader('Content-Type', 'application/json');
+  next();
+});
+
+app.get('/serviceWorker.js', (req, res, next) => {
+  res.setHeader('Content-Type', 'application/javascript');
+  next();
+});
+
 console.log(`Serving uploads from: ${uploadsPath} with fallback to default images`);
 
 // Add health check endpoint for Render
