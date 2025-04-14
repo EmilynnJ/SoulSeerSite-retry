@@ -165,11 +165,20 @@ export class PostgresStorage implements IStorage {
   sessionStore: SessionStore;
   
   constructor() {
-    this.sessionStore = new PostgresSessionStore({
-      pool,
-      tableName: 'user_sessions', // Separate from our sessions table which is for readings
-      createTableIfMissing: false // Changed to false to prevent conflicts with existing session table
+    // Use in-memory session store for development to avoid PostgreSQL session conflicts
+    const sessionConfig = {
+      // For production, consider using the PostgreSQL store with careful configuration
+      // pool,
+      // tableName: 'user_sessions', 
+      // createTableIfMissing: false
+    };
+    
+    // Use memory store instead of PostgreSQL to avoid table creation conflicts
+    this.sessionStore = new MemoryStore({
+      checkPeriod: 86400000 // Prune expired entries every 24h
     });
+    
+    log('Using in-memory session store to avoid PostgreSQL table conflicts', 'storage');
   }
   
   // User methods
