@@ -1,1031 +1,526 @@
-import { DashboardLayout } from "./dashboard-layout";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Reading, User } from "@shared/schema";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Switch } from "@/components/ui/switch";
-import { Label } from "@/components/ui/label";
 import { useAuth } from "@/hooks/use-auth";
-import { apiRequest, queryClient } from "@/lib/queryClient";
-import { useEffect, useState, useRef } from "react";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { AvailabilityManager } from "./availability-manager";
 import { Badge } from "@/components/ui/badge";
-import { formatCurrency } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Loader2, MessageCircle, Phone, Video, UserIcon, X, Radio, Wifi, CreditCard } from "lucide-react";
-import { Input } from "@/components/ui/input";
-import { useToast } from "@/hooks/use-toast";
-import { Textarea } from "@/components/ui/textarea";
+import { Progress } from "@/components/ui/progress";
+import { Separator } from "@/components/ui/separator";
 import { 
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-  DialogFooter,
-  DialogClose
-} from "@/components/ui/dialog";
+  DollarSign, 
+  Users, 
+  Calendar, 
+  Clock, 
+  Star, 
+  TrendingUp, 
+  Settings, 
+  BarChart,
+  MessageSquare,
+  Video,
+  Phone
+} from "lucide-react";
+import { apiRequest } from "@/lib/queryClient";
+import { format } from "date-fns";
+
+interface Reading {
+  id: number;
+  clientId: number;
+  readerId: number;
+  type: string;
+  status: string;
+  duration: number;
+  totalAmount: number;
+  createdAt: string;
+  completedAt: string;
+  clientName?: string;
+}
+
+interface Session {
+  id: number;
+  clientId: number;
+  readerId: number;
+  type: string;
+  status: string;
+  duration: number;
+  totalAmount: number;
+  startedAt: string;
+  endedAt: string;
+  clientName?: string;
+}
+
+interface ReaderBalance {
+  id: number;
+  readerId: number;
+  availableBalance: number;
+  pendingBalance: number;
+  lifetimeEarnings: number;
+  lastPayout: string | null;
+  nextScheduledPayout: string | null;
+}
 
 export function ReaderDashboard() {
   const { user } = useAuth();
-  const { toast } = useToast();
-  const [isOnline, setIsOnline] = useState(user?.isOnline || false);
-  const [isPricingDialogOpen, setIsPricingDialogOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState("overview");
   
-  // Legacy per-minute pricing fields
-  const [pricingChat, setPricingChat] = useState<number | undefined>(user?.pricingChat || 0);
-  const [pricingVoice, setPricingVoice] = useState<number | undefined>(user?.pricingVoice || 0);
-  const [pricingVideo, setPricingVideo] = useState<number | undefined>(user?.pricingVideo || 0);
-  
-  // New fixed-price scheduled reading fields
-  const [scheduledChatPrice15, setScheduledChatPrice15] = useState<number | undefined>(user?.scheduledChatPrice15 || 0);
-  const [scheduledChatPrice30, setScheduledChatPrice30] = useState<number | undefined>(user?.scheduledChatPrice30 || 0);
-  const [scheduledChatPrice60, setScheduledChatPrice60] = useState<number | undefined>(user?.scheduledChatPrice60 || 0);
-  const [scheduledVoicePrice15, setScheduledVoicePrice15] = useState<number | undefined>(user?.scheduledVoicePrice15 || 0);
-  const [scheduledVoicePrice30, setScheduledVoicePrice30] = useState<number | undefined>(user?.scheduledVoicePrice30 || 0);
-  const [scheduledVoicePrice60, setScheduledVoicePrice60] = useState<number | undefined>(user?.scheduledVoicePrice60 || 0);
-  const [scheduledVideoPrice15, setScheduledVideoPrice15] = useState<number | undefined>(user?.scheduledVideoPrice15 || 0);
-  const [scheduledVideoPrice30, setScheduledVideoPrice30] = useState<number | undefined>(user?.scheduledVideoPrice30 || 0);
-  const [scheduledVideoPrice60, setScheduledVideoPrice60] = useState<number | undefined>(user?.scheduledVideoPrice60 || 0);
-  
-  const [isUpdatingPricing, setIsUpdatingPricing] = useState(false);
-
-  const { data: readings, isLoading } = useQuery<Reading[]>({
-    queryKey: ["/api/readings/reader"],
+  // Fetch reader's completed readings
+  const { data: readings } = useQuery({
+    queryKey: ['/api/readings/reader', user?.id],
+    queryFn: () => apiRequest<Reading[]>(`/api/readings/reader/${user?.id}`),
+    enabled: !!user && user.role === 'reader',
   });
 
-  useEffect(() => {
-    if (user) {
-      setIsOnline(user.isOnline || false);
-      
-      // Initialize legacy per-minute pricing
-      setPricingChat(user.pricingChat || 0);
-      setPricingVoice(user.pricingVoice || 0);
-      setPricingVideo(user.pricingVideo || 0);
-      
-      // Initialize fixed-price scheduled reading pricing
-      setScheduledChatPrice15(user.scheduledChatPrice15 || 0);
-      setScheduledChatPrice30(user.scheduledChatPrice30 || 0);
-      setScheduledChatPrice60(user.scheduledChatPrice60 || 0);
-      setScheduledVoicePrice15(user.scheduledVoicePrice15 || 0);
-      setScheduledVoicePrice30(user.scheduledVoicePrice30 || 0);
-      setScheduledVoicePrice60(user.scheduledVoicePrice60 || 0);
-      setScheduledVideoPrice15(user.scheduledVideoPrice15 || 0);
-      setScheduledVideoPrice30(user.scheduledVideoPrice30 || 0);
-      setScheduledVideoPrice60(user.scheduledVideoPrice60 || 0);
-    }
-  }, [user]);
-
-  const handleOnlineToggle = async (checked: boolean) => {
-    try {
-      const response = await apiRequest("PATCH", "/api/readers/status", {
-        isOnline: checked
-      });
-
-      if (response.ok) {
-        setIsOnline(checked);
-        // Invalidate both user and online readers data
-        queryClient.invalidateQueries({ queryKey: ["/api/user"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/readers/online"] });
-      } else {
-        toast({
-          title: "Error",
-          description: "Failed to update online status",
-          variant: "destructive"
-        });
-      }
-    } catch (err) {
-      console.error("Failed to update online status:", err);
-      toast({
-        title: "Error",
-        description: "Failed to update online status",
-        variant: "destructive"
-      });
-    }
-  };
-
-  const [isEditingProfile, setIsEditingProfile] = useState(false);
-  const [profileData, setProfileData] = useState({
-    username: user?.username || '',
-    fullName: user?.fullName || '',
-    bio: user?.bio || '',
-    specialties: user?.specialties || []
+  // Fetch reader's recent sessions
+  const { data: sessions } = useQuery({
+    queryKey: ['/api/sessions/reader', user?.id],
+    queryFn: () => apiRequest<Session[]>(`/api/sessions/reader/${user?.id}`),
+    enabled: !!user && user.role === 'reader',
   });
-  
-  const [profileImage, setProfileImage] = useState<File | null>(null);
-  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Handle file upload for profile picture
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0];
-      setProfileImage(file);
-      
-      // Create URL for preview
-      const previewUrl = URL.createObjectURL(file);
-      setPreviewImageUrl(previewUrl);
-    }
-  };
-  
-  const handleUpdateProfile = async () => {
-    try {
-      const formData = new FormData();
-      
-      // Add all profile data to formData
-      Object.entries(profileData).forEach(([key, value]) => {
-        if (key === 'specialties') {
-          formData.append(key, JSON.stringify(value));
-        } else {
-          formData.append(key, String(value));
-        }
-      });
-      
-      // Add profile image if one was selected
-      if (profileImage) {
-        formData.append('profileImage', profileImage);
-      }
+  // Fetch reader's balance
+  const { data: balance } = useQuery({
+    queryKey: ['/api/reader-balance', user?.id],
+    queryFn: () => apiRequest<ReaderBalance>(`/api/reader-balance/${user?.id}`),
+    enabled: !!user && user.role === 'reader',
+  });
 
-      const response = await fetch('/api/readers/profile', {
-        method: 'PATCH',
-        body: formData
-      });
+  // Calculate statistics
+  const calculateStats = () => {
+    if (!readings || !sessions || !balance) return {
+      completedReadings: 0,
+      totalClients: 0,
+      totalMinutes: 0,
+      averageRating: 0,
+      totalEarnings: 0,
+      pendingEarnings: 0,
+      availableEarnings: 0
+    };
 
-      if (!response.ok) {
-        throw new Error('Failed to update profile');
-      }
+    const uniqueClientIds = new Set([
+      ...readings.map(r => r.clientId),
+      ...sessions.map(s => s.clientId)
+    ]);
 
-      // Refresh user data
-      queryClient.invalidateQueries({ queryKey: ["/api/user"] });
-      setIsEditingProfile(false);
-      
-      toast({
-        title: "Profile Updated",
-        description: "Your profile has been successfully updated.",
-      });
-    } catch (error: any) {
-      toast({
-        title: "Error",
-        description: error.message || "Failed to update profile",
-        variant: "destructive",
-      });
-    }
+    const totalMinutes = readings.reduce((sum, r) => sum + (r.duration || 0), 0) + 
+                        sessions.reduce((sum, s) => sum + (s.duration || 0), 0);
+
+    return {
+      completedReadings: readings.filter(r => r.status === 'completed').length + 
+                         sessions.filter(s => s.status === 'completed').length,
+      totalClients: uniqueClientIds.size,
+      totalMinutes,
+      averageRating: 4.85, // Placeholder - would come from actual rating data
+      totalEarnings: balance.lifetimeEarnings / 100,
+      pendingEarnings: balance.pendingBalance / 100,
+      availableEarnings: balance.availableBalance / 100
+    };
   };
 
-  const handleUpdatePricing = async () => {
-    if (isUpdatingPricing) return;
+  const stats = calculateStats();
 
-    try {
-      setIsUpdatingPricing(true);
-
-      const response = await apiRequest("PATCH", "/api/readers/pricing", {
-        // Legacy per-minute pricing
-        pricingChat,
-        pricingVoice,
-        pricingVideo,
-        
-        // Fixed-price scheduled reading pricing
-        scheduledChatPrice15,
-        scheduledChatPrice30,
-        scheduledChatPrice60,
-        scheduledVoicePrice15,
-        scheduledVoicePrice30,
-        scheduledVoicePrice60,
-        scheduledVideoPrice15,
-        scheduledVideoPrice30,
-        scheduledVideoPrice60
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.message || "Failed to update pricing");
-      }
-
-      // Invalidate user data to refresh pricing
-      queryClient.invalidateQueries({ queryKey: ["/api/user"] });
-
-      setIsPricingDialogOpen(false);
-      toast({
-        title: "Pricing Updated",
-        description: "Your reading rates have been successfully saved.",
-      });
-    } catch (err: any) {
-      toast({
-        title: "Error",
-        description: err.message || "Failed to update pricing",
-        variant: "destructive",
-      });
-    } finally {
-      setIsUpdatingPricing(false);
-    }
+  // Recent activity for the dashboard
+  const getRecentActivity = () => {
+    if (!readings || !sessions) return [];
+    
+    const allActivity = [
+      ...readings.map(reading => ({
+        id: `reading-${reading.id}`,
+        type: 'reading',
+        date: new Date(reading.createdAt),
+        data: reading
+      })),
+      ...sessions.map(session => ({
+        id: `session-${session.id}`,
+        type: 'session',
+        date: new Date(session.startedAt || session.createdAt),
+        data: session
+      }))
+    ];
+    
+    // Sort by date descending
+    return allActivity
+      .sort((a, b) => b.date.getTime() - a.date.getTime())
+      .slice(0, 5); // Get most recent 5
   };
 
-  // Group readings by status
-  const waitingReadings = readings?.filter(
-    (r) => r.status === "payment_completed"
-  ) || [];
+  const recentActivity = getRecentActivity();
 
-  const activeReadings = readings?.filter(
-    (r) => r.status === "in_progress"
-  ) || [];
-
-  const upcomingReadings = readings?.filter(
-    (r) => r.status === "scheduled"
-  ) || [];
-
-  const completedReadings = readings?.filter(
-    (r) => r.status === "completed"
-  ) || [];
+  if (!user || user.role !== 'reader') {
+    return (
+      <div className="p-4">
+        <p>Reader dashboard is only available to users with reader privileges.</p>
+      </div>
+    );
+  }
 
   return (
-    <DashboardLayout title="Reader Dashboard">
-      {/* Quick Actions Section */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6 mb-8">
-        <Button 
-          className="bg-purple-600 hover:bg-purple-700 text-white p-6 h-auto flex flex-col items-center justify-center gap-2"
-          size="lg"
-          onClick={async () => {
-            try {
-              toast({
-                title: "Starting Livestream",
-                description: "Setting up your live stream...",
-              });
-              
-              // Create a livestream
-              const response = await fetch('/api/livestreams', {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                  title: `${user?.fullName || 'Reader'}'s Live Session`,
-                  description: 'Live psychic reading session. Join now to interact!',
-                  category: 'Readings'
-                })
-              });
-              
-              if (!response.ok) {
-                throw new Error('Failed to create livestream');
-              }
-              
-              const livestream = await response.json();
-              
-              // Redirect to the livestream page
-              window.location.href = `/livestream/${livestream.id}`;
-            } catch (error) {
-              console.error('Error starting livestream:', error);
-              toast({
-                title: "Error",
-                description: "Failed to start livestream. Please try again.",
-                variant: "destructive"
-              });
-            }
-          }}
-        >
-          <div className="w-full flex items-center justify-center">
-            <Radio className="h-8 w-8 text-white mb-2" />
-          </div>
-          <span className="text-xl font-medium">Go Live Now</span>
-          <p className="text-sm opacity-90 font-normal">Start a livestream for your followers</p>
-        </Button>
-
-        <Button 
-          className="bg-blue-600 hover:bg-blue-700 text-white p-6 h-auto flex flex-col items-center justify-center gap-2"
-          size="lg"
-          onClick={async () => {
-            try {
-              const response = await fetch('/api/stripe/connect', {
-                method: 'GET',
-                headers: {
-                  'Content-Type': 'application/json'
-                }
-              });
-              
-              if (!response.ok) {
-                throw new Error('Failed to get Stripe Connect URL');
-              }
-              
-              const data = await response.json();
-              
-              if (data.url) {
-                toast({
-                  title: "Redirecting to Stripe",
-                  description: "You will be redirected to Stripe to set up payouts.",
-                });
-                window.location.href = data.url;
-              } else {
-                throw new Error('Invalid response from server');
-              }
-            } catch (error) {
-              console.error('Stripe Connect error:', error);
-              toast({
-                title: "Connection Error",
-                description: "Unable to connect to Stripe at this time. Please try again later.",
-                variant: "destructive"
-              });
-            }
-          }}
-        >
-          <div className="w-full flex items-center justify-center">
-            <CreditCard className="h-8 w-8 text-white mb-2" />
-          </div>
-          <span className="text-xl font-medium">Connect Stripe</span>
-          <p className="text-sm opacity-90 font-normal">Set up payouts for your readings</p>
-        </Button>
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <div>
+          <h2 className="text-3xl font-alex">Reader Dashboard</h2>
+          <p className="text-muted-foreground">Manage your readings and availability</p>
+        </div>
+        <Badge variant={user.isOnline ? "default" : "outline"}>
+          {user.isOnline ? "Online" : "Offline"}
+        </Badge>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 md:gap-6 mb-8">
-        <Card className="glow-card">
-          <CardHeader className="p-3 md:p-6">
-            <CardTitle className="text-lg md:text-xl">Online Status</CardTitle>
-          </CardHeader>
-          <CardContent className="p-3 md:p-6 pt-0 md:pt-0">
-            <div className="flex items-center justify-between space-x-2">
-              <Label htmlFor="online-status" className="text-sm md:text-base">Available for Readings</Label>
-              <Switch 
-                id="online-status" 
-                checked={isOnline}
-                onCheckedChange={handleOnlineToggle}
-              />
-            </div>
-            <div className="mt-2">
-              <Badge className={isOnline ? "bg-green-500 text-white" : "bg-red-500 text-white"}>
-                {isOnline ? "Online" : "Offline"}
-              </Badge>
-              <div className="text-xs mt-1 text-gray-400">
-                {isOnline 
-                  ? "You are visible to clients" 
-                  : "You are not visible to clients"}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+      <Tabs defaultValue="overview" value={activeTab} onValueChange={setActiveTab}>
+        <TabsList className="grid grid-cols-4 mb-6">
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="schedule">Schedule</TabsTrigger>
+          <TabsTrigger value="earnings">Earnings</TabsTrigger>
+          <TabsTrigger value="settings">Settings</TabsTrigger>
+        </TabsList>
 
-        <Card className="glow-card">
-          <CardHeader className="p-3 md:p-6">
-            <CardTitle className="text-lg md:text-xl">Reading Rates</CardTitle>
-            <CardDescription className="text-xs md:text-sm">
-              Per minute pricing for each reading type
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="p-3 md:p-6 pt-0 md:pt-0">
-            <div className="space-y-2 mb-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center">
-                  <MessageCircle className="h-4 w-4 mr-2" />
-                  <span className="text-sm">Chat:</span>
-                </div>
-                <span className="font-bold text-sm gold-gradient">
-                  {formatCurrency(pricingChat ? pricingChat / 100 : 0)}/min
-                </span>
-              </div>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center">
-                  <Phone className="h-4 w-4 mr-2" />
-                  <span className="text-sm">Voice:</span>
-                </div>
-                <span className="font-bold text-sm gold-gradient">
-                  {formatCurrency(pricingVoice ? pricingVoice / 100 : 0)}/min
-                </span>
-              </div>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center">
-                  <Video className="h-4 w-4 mr-2" />
-                  <span className="text-sm">Video:</span>
-                </div>
-                <span className="font-bold text-sm gold-gradient">
-                  {formatCurrency(pricingVideo ? pricingVideo / 100 : 0)}/min
-                </span>
-              </div>
-            </div>
+        {/* Overview Tab */}
+        <TabsContent value="overview" className="space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium flex items-center">
+                  <Users className="h-4 w-4 mr-2 text-primary" />
+                  Total Clients
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{stats.totalClients}</div>
+                <p className="text-xs text-muted-foreground">Unique clients served</p>
+              </CardContent>
+            </Card>
 
-            <Button 
-              variant="outline" 
-              size="sm" 
-              className="w-full" 
-              onClick={() => setIsPricingDialogOpen(true)}
-            >
-              Update Pricing
-            </Button>
-          </CardContent>
-        </Card>
-        
-        <Card className="glow-card">
-          <CardHeader className="p-3 md:p-6">
-            <CardTitle className="text-lg md:text-xl">Scheduled Reading Prices</CardTitle>
-            <CardDescription className="text-xs md:text-sm">
-              Fixed pricing for scheduled sessions
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="p-3 md:p-6 pt-0 md:pt-0">
-            <div className="space-y-4">
-              <div>
-                <h3 className="text-sm font-medium mb-1 flex items-center">
-                  <MessageCircle className="h-3 w-3 mr-1" />Chat
-                </h3>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs">15 min:</span>
-                  <span className="font-medium text-xs gold-gradient">
-                    {formatCurrency(scheduledChatPrice15 ? scheduledChatPrice15 / 100 : 0)}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs">30 min:</span>
-                  <span className="font-medium text-xs gold-gradient">
-                    {formatCurrency(scheduledChatPrice30 ? scheduledChatPrice30 / 100 : 0)}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs">60 min:</span>
-                  <span className="font-medium text-xs gold-gradient">
-                    {formatCurrency(scheduledChatPrice60 ? scheduledChatPrice60 / 100 : 0)}
-                  </span>
-                </div>
-              </div>
-              
-              <div>
-                <h3 className="text-sm font-medium mb-1 flex items-center">
-                  <Phone className="h-3 w-3 mr-1" />Voice
-                </h3>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs">15 min:</span>
-                  <span className="font-medium text-xs gold-gradient">
-                    {formatCurrency(scheduledVoicePrice15 ? scheduledVoicePrice15 / 100 : 0)}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs">30 min:</span>
-                  <span className="font-medium text-xs gold-gradient">
-                    {formatCurrency(scheduledVoicePrice30 ? scheduledVoicePrice30 / 100 : 0)}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs">60 min:</span>
-                  <span className="font-medium text-xs gold-gradient">
-                    {formatCurrency(scheduledVoicePrice60 ? scheduledVoicePrice60 / 100 : 0)}
-                  </span>
-                </div>
-              </div>
-              
-              <div>
-                <h3 className="text-sm font-medium mb-1 flex items-center">
-                  <Video className="h-3 w-3 mr-1" />Video
-                </h3>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs">15 min:</span>
-                  <span className="font-medium text-xs gold-gradient">
-                    {formatCurrency(scheduledVideoPrice15 ? scheduledVideoPrice15 / 100 : 0)}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs">30 min:</span>
-                  <span className="font-medium text-xs gold-gradient">
-                    {formatCurrency(scheduledVideoPrice30 ? scheduledVideoPrice30 / 100 : 0)}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs">60 min:</span>
-                  <span className="font-medium text-xs gold-gradient">
-                    {formatCurrency(scheduledVideoPrice60 ? scheduledVideoPrice60 / 100 : 0)}
-                  </span>
-                </div>
-              </div>
-            </div>
-            
-            <Button 
-              variant="outline" 
-              size="sm" 
-              className="w-full mt-4" 
-              onClick={() => setIsPricingDialogOpen(true)}
-            >
-              Update Pricing
-            </Button>
-          </CardContent>
-        </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium flex items-center">
+                  <Clock className="h-4 w-4 mr-2 text-primary" />
+                  Reading Time
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{stats.totalMinutes} min</div>
+                <p className="text-xs text-muted-foreground">Total minutes of readings</p>
+              </CardContent>
+            </Card>
 
-        <Card className="glow-card sm:col-span-2 md:col-span-1">
-          <CardHeader className="p-3 md:p-6">
-            <CardTitle className="text-lg md:text-xl">Statistics</CardTitle>
-          </CardHeader>
-          <CardContent className="p-3 md:p-6 pt-0 md:pt-0">
-            <div className="grid grid-cols-3 sm:grid-cols-3 md:grid-cols-1 gap-2 md:gap-2">
-              <div className="flex flex-col md:flex-row md:justify-between">
-                <span className="text-muted-foreground text-xs md:text-sm">Total Readings:</span>
-                <span className="text-sm md:text-base font-medium">{completedReadings.length}</span>
-              </div>
-              <div className="flex flex-col md:flex-row md:justify-between">
-                <span className="text-muted-foreground text-xs md:text-sm">Rating:</span>
-                <span className="text-sm md:text-base font-medium">⭐ {user?.rating || "-"}/5</span>
-              </div>
-              <div className="flex flex-col md:flex-row md:justify-between">
-                <span className="text-muted-foreground text-xs md:text-sm">Reviews:</span>
-                <span className="text-sm md:text-base font-medium">{user?.reviewCount || 0}</span>
-              </div>
-            </div>
-            
-            <Button 
-              variant="outline" 
-              size="sm" 
-              className="w-full mt-4" 
-              onClick={() => setIsEditingProfile(true)}
-            >
-              Edit Profile
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium flex items-center">
+                  <Star className="h-4 w-4 mr-2 text-primary" />
+                  Average Rating
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{stats.averageRating}</div>
+                <div className="flex">
+                  {[...Array(5)].map((_, i) => (
+                    <Star 
+                      key={i} 
+                      className={`h-4 w-4 ${i < Math.floor(stats.averageRating) ? 'text-yellow-400 fill-yellow-400' : 'text-gray-300'}`} 
+                    />
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
 
-      {/* Active Readings */}
-      <div className="mb-8">
-        <h2 className="text-xl font-bold mb-4">Active Sessions</h2>
-        {isLoading ? (
-          <div className="flex justify-center items-center py-10">
-            <Loader2 className="w-10 h-10 animate-spin text-primary" />
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium flex items-center">
+                  <DollarSign className="h-4 w-4 mr-2 text-primary" />
+                  Total Earnings
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">${stats.totalEarnings.toFixed(2)}</div>
+                <p className="text-xs text-muted-foreground">Lifetime earnings</p>
+              </CardContent>
+            </Card>
           </div>
-        ) : activeReadings.length > 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {activeReadings.map((reading) => (
-              <ReadingCard key={reading.id} reading={reading} />
-            ))}
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <Card className="md:col-span-2">
+              <CardHeader>
+                <CardTitle className="flex items-center">
+                  <BarChart className="h-5 w-5 mr-2" />
+                  Recent Activity
+                </CardTitle>
+                <CardDescription>Your latest readings and sessions</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {recentActivity.length > 0 ? (
+                  <div className="space-y-4">
+                    {recentActivity.map((activity) => {
+                      const data = activity.data;
+                      const isReading = activity.type === 'reading';
+                      const typeIcon = data.type === 'chat' ? (
+                        <MessageSquare className="h-4 w-4" />
+                      ) : data.type === 'video' ? (
+                        <Video className="h-4 w-4" />
+                      ) : (
+                        <Phone className="h-4 w-4" />
+                      );
+                      
+                      return (
+                        <div key={activity.id} className="flex items-center justify-between">
+                          <div className="flex items-center">
+                            <div className={`rounded-full p-2 mr-3 ${data.type === 'chat' ? 'bg-blue-100' : data.type === 'video' ? 'bg-purple-100' : 'bg-green-100'}`}>
+                              {typeIcon}
+                            </div>
+                            <div>
+                              <p className="font-medium">
+                                {isReading ? 'Reading' : 'Session'} with {data.clientName || `Client #${data.clientId}`}
+                              </p>
+                              <p className="text-sm text-muted-foreground">
+                                {data.type} • {data.duration || 0} min • ${((data.totalAmount || 0) / 100).toFixed(2)}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="text-sm text-muted-foreground">
+                            {format(activity.date, 'MMM d, h:mm a')}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="text-center text-muted-foreground py-6">No recent activity to display</p>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center">
+                  <DollarSign className="h-5 w-5 mr-2" />
+                  Earnings Status
+                </CardTitle>
+                <CardDescription>Your current balance and payouts</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-sm">
+                      <span className="font-medium">Available for Payout</span>
+                      <span className="font-bold">${stats.availableEarnings.toFixed(2)}</span>
+                    </div>
+                    <Progress value={stats.availableEarnings > 0 ? 100 : 0} className="h-2" />
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-sm">
+                      <span className="font-medium">Pending Earnings</span>
+                      <span className="font-bold">${stats.pendingEarnings.toFixed(2)}</span>
+                    </div>
+                    <Progress value={75} className="h-2" />
+                    <p className="text-xs text-muted-foreground">Funds will be available after sessions are reviewed</p>
+                  </div>
+
+                  <Separator />
+
+                  <div>
+                    <h4 className="text-sm font-medium mb-2">Next Payout</h4>
+                    <p className="text-sm">
+                      {balance?.nextScheduledPayout ? 
+                        format(new Date(balance.nextScheduledPayout), 'MMMM d, yyyy') : 
+                        'Automatic when balance exceeds $15'
+                      }
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
           </div>
-        ) : (
-          <Card className="glow-card">
-            <CardContent className="pt-6 text-center">
-              <p>No active reading sessions.</p>
+        </TabsContent>
+
+        {/* Schedule Tab */}
+        <TabsContent value="schedule" className="space-y-6">
+          <AvailabilityManager readerId={user.id} />
+          
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center">
+                <Calendar className="h-5 w-5 mr-2" />
+                Upcoming Scheduled Readings
+              </CardTitle>
+              <CardDescription>Manage your booked sessions</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {readings && readings.filter(r => r.status === 'scheduled').length > 0 ? (
+                <div className="space-y-4">
+                  {readings
+                    .filter(r => r.status === 'scheduled')
+                    .map(reading => (
+                      <div key={reading.id} className="flex justify-between items-center">
+                        <div>
+                          <p className="font-medium">Reading with {reading.clientName || `Client #${reading.clientId}`}</p>
+                          <p className="text-sm text-muted-foreground">
+                            {reading.type} • {reading.duration || 30} min
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className="font-medium">{format(new Date(reading.scheduledAt || reading.createdAt), 'MMM d, yyyy')}</p>
+                          <p className="text-sm text-muted-foreground">{format(new Date(reading.scheduledAt || reading.createdAt), 'h:mm a')}</p>
+                        </div>
+                      </div>
+                    ))
+                  }
+                </div>
+              ) : (
+                <p className="text-center text-muted-foreground py-6">No upcoming scheduled readings</p>
+              )}
             </CardContent>
           </Card>
-        )}
-      </div>
+        </TabsContent>
 
-      {/* Waiting Readings */}
-      {waitingReadings.length > 0 && (
-        <div className="mb-8">
-          <h2 className="text-xl font-bold mb-4">Waiting for You</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {waitingReadings.map((reading) => (
-              <ReadingCard key={reading.id} reading={reading} actionLabel="Start Session" />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Upcoming Readings */}
-      {upcomingReadings.length > 0 && (
-        <div className="mb-8">
-          <h2 className="text-xl font-bold mb-4">Upcoming Sessions</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {upcomingReadings.map((reading) => (
-              <ReadingCard key={reading.id} reading={reading} />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Pricing Dialog */}
-      <Dialog open={isPricingDialogOpen} onOpenChange={setIsPricingDialogOpen}>
-        <DialogContent className="sm:max-w-[425px]">
-          <DialogHeader>
-            <DialogTitle>Update Reading Rates</DialogTitle>
-            <DialogDescription>
-              Set your pricing for different reading types and durations.
-              All prices are in US dollars (cents).
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-8 py-4">
-            {/* Legacy per-minute pricing section */}
-            <div>
-              <h3 className="text-lg font-semibold mb-3">Pay-Per-Minute Rates</h3>
-              <p className="text-sm text-muted-foreground mb-4">
-                These rates are used for pay-per-minute on-demand readings.
-              </p>
-              
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <div className="flex items-center">
-                    <MessageCircle className="h-5 w-5 mr-2" />
-                    <Label htmlFor="pricing-chat">Chat Rate (cents per minute)</Label>
-                  </div>
-                  <Input
-                    id="pricing-chat"
-                    type="number"
-                    value={pricingChat}
-                    onChange={(e) => setPricingChat(parseInt(e.target.value) || 0)}
-                    min={0}
-                    placeholder="199 for $1.99"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Example: 199 = $1.99 per minute
-                  </p>
+        {/* Earnings Tab */}
+        <TabsContent value="earnings" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center">
+                <TrendingUp className="h-5 w-5 mr-2" />
+                Earnings Overview
+              </CardTitle>
+              <CardDescription>Your revenue and payout history</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                <div className="bg-muted rounded-lg p-4 text-center">
+                  <p className="text-sm font-medium mb-1">Available Balance</p>
+                  <p className="text-2xl font-bold">${stats.availableEarnings.toFixed(2)}</p>
                 </div>
-
-                <div className="space-y-2">
-                  <div className="flex items-center">
-                    <Phone className="h-5 w-5 mr-2" />
-                    <Label htmlFor="pricing-voice">Voice Rate (cents per minute)</Label>
-                  </div>
-                  <Input
-                    id="pricing-voice"
-                    type="number"
-                    value={pricingVoice}
-                    onChange={(e) => setPricingVoice(parseInt(e.target.value) || 0)}
-                    min={0}
-                    placeholder="299 for $2.99"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Example: 299 = $2.99 per minute
-                  </p>
+                <div className="bg-muted rounded-lg p-4 text-center">
+                  <p className="text-sm font-medium mb-1">Pending Balance</p>
+                  <p className="text-2xl font-bold">${stats.pendingEarnings.toFixed(2)}</p>
                 </div>
-
-                <div className="space-y-2">
-                  <div className="flex items-center">
-                    <Video className="h-5 w-5 mr-2" />
-                    <Label htmlFor="pricing-video">Video Rate (cents per minute)</Label>
-                  </div>
-                  <Input
-                    id="pricing-video"
-                    type="number"
-                    value={pricingVideo}
-                    onChange={(e) => setPricingVideo(parseInt(e.target.value) || 0)}
-                    min={0}
-                    placeholder="499 for $4.99"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Example: 499 = $4.99 per minute
-                  </p>
+                <div className="bg-muted rounded-lg p-4 text-center">
+                  <p className="text-sm font-medium mb-1">Lifetime Earnings</p>
+                  <p className="text-2xl font-bold">${stats.totalEarnings.toFixed(2)}</p>
                 </div>
               </div>
-            </div>
-            
-            {/* Fixed-price scheduled readings section */}
-            <div>
-              <h3 className="text-lg font-semibold mb-3">Scheduled Reading Prices</h3>
-              <p className="text-sm text-muted-foreground mb-4">
-                Set fixed prices for scheduled readings of different durations. 
-                Clients pay these upfront when they book. 
-                You receive 70% of each payment.
-              </p>
-              
-              {/* Chat Reading Prices */}
+
+              {/* Revenue breakdown by service type */}
               <div className="mb-6">
-                <h4 className="font-medium mb-2 flex items-center"><MessageCircle className="h-4 w-4 mr-2" />Chat Readings</h4>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="scheduled-chat-15">15 Minutes (cents)</Label>
-                    <Input
-                      id="scheduled-chat-15"
-                      type="number"
-                      value={scheduledChatPrice15}
-                      onChange={(e) => setScheduledChatPrice15(parseInt(e.target.value) || 0)}
-                      min={0}
-                      placeholder="1499 for $14.99"
-                    />
+                <h3 className="text-lg font-medium mb-3">Revenue by Service</h3>
+                <div className="space-y-3">
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-sm">
+                      <span>Chat Sessions</span>
+                      <span>35%</span>
+                    </div>
+                    <Progress value={35} className="h-2" />
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="scheduled-chat-30">30 Minutes (cents)</Label>
-                    <Input
-                      id="scheduled-chat-30"
-                      type="number"
-                      value={scheduledChatPrice30}
-                      onChange={(e) => setScheduledChatPrice30(parseInt(e.target.value) || 0)}
-                      min={0}
-                      placeholder="2999 for $29.99"
-                    />
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-sm">
+                      <span>Voice Sessions</span>
+                      <span>25%</span>
+                    </div>
+                    <Progress value={25} className="h-2" />
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="scheduled-chat-60">60 Minutes (cents)</Label>
-                    <Input
-                      id="scheduled-chat-60"
-                      type="number"
-                      value={scheduledChatPrice60}
-                      onChange={(e) => setScheduledChatPrice60(parseInt(e.target.value) || 0)}
-                      min={0}
-                      placeholder="5999 for $59.99"
-                    />
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-sm">
+                      <span>Video Sessions</span>
+                      <span>40%</span>
+                    </div>
+                    <Progress value={40} className="h-2" />
                   </div>
                 </div>
               </div>
-              
-              {/* Voice Reading Prices */}
-              <div className="mb-6">
-                <h4 className="font-medium mb-2 flex items-center"><Phone className="h-4 w-4 mr-2" />Voice Readings</h4>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="scheduled-voice-15">15 Minutes (cents)</Label>
-                    <Input
-                      id="scheduled-voice-15"
-                      type="number"
-                      value={scheduledVoicePrice15}
-                      onChange={(e) => setScheduledVoicePrice15(parseInt(e.target.value) || 0)}
-                      min={0}
-                      placeholder="1999 for $19.99"
-                    />
+
+              <h3 className="text-lg font-medium mb-3">Recent Payouts</h3>
+              {/* List of payouts would go here */}
+              <p className="text-center text-muted-foreground py-4">No payouts to display yet</p>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Settings Tab */}
+        <TabsContent value="settings" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center">
+                <Settings className="h-5 w-5 mr-2" />
+                Service Settings
+              </CardTitle>
+              <CardDescription>Configure your pricing and session options</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-8">
+                <div>
+                  <h3 className="text-lg font-medium mb-4">Pricing Settings</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="border rounded-md p-4">
+                      <p className="font-medium flex items-center mb-2">
+                        <MessageSquare className="h-4 w-4 mr-2" />
+                        Chat Reading
+                      </p>
+                      <p className="text-2xl font-bold mb-1">${(user.pricingChat || 0) / 100}/min</p>
+                      <Button variant="outline" size="sm" className="w-full">
+                        Edit Price
+                      </Button>
+                    </div>
+                    <div className="border rounded-md p-4">
+                      <p className="font-medium flex items-center mb-2">
+                        <Phone className="h-4 w-4 mr-2" />
+                        Voice Reading
+                      </p>
+                      <p className="text-2xl font-bold mb-1">${(user.pricingVoice || 0) / 100}/min</p>
+                      <Button variant="outline" size="sm" className="w-full">
+                        Edit Price
+                      </Button>
+                    </div>
+                    <div className="border rounded-md p-4">
+                      <p className="font-medium flex items-center mb-2">
+                        <Video className="h-4 w-4 mr-2" />
+                        Video Reading
+                      </p>
+                      <p className="text-2xl font-bold mb-1">${(user.pricingVideo || 0) / 100}/min</p>
+                      <Button variant="outline" size="sm" className="w-full">
+                        Edit Price
+                      </Button>
+                    </div>
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="scheduled-voice-30">30 Minutes (cents)</Label>
-                    <Input
-                      id="scheduled-voice-30"
-                      type="number"
-                      value={scheduledVoicePrice30}
-                      onChange={(e) => setScheduledVoicePrice30(parseInt(e.target.value) || 0)}
-                      min={0}
-                      placeholder="3999 for $39.99"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="scheduled-voice-60">60 Minutes (cents)</Label>
-                    <Input
-                      id="scheduled-voice-60"
-                      type="number"
-                      value={scheduledVoicePrice60}
-                      onChange={(e) => setScheduledVoicePrice60(parseInt(e.target.value) || 0)}
-                      min={0}
-                      placeholder="7999 for $79.99"
-                    />
+                </div>
+
+                <div>
+                  <h3 className="text-lg font-medium mb-4">Session Settings</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="border rounded-md p-4">
+                      <p className="font-medium mb-2">Minimum Session Length</p>
+                      <p className="text-2xl font-bold mb-1">{user.minimumSessionLength || 15} minutes</p>
+                      <p className="text-sm text-muted-foreground mb-3">
+                        The minimum duration for any reading session
+                      </p>
+                      <Button variant="outline" size="sm">
+                        Edit Minimum
+                      </Button>
+                    </div>
+                    <div className="border rounded-md p-4">
+                      <p className="font-medium mb-2">Session Types</p>
+                      <div className="space-y-2 mb-3">
+                        <div className="flex items-center">
+                          <Checkbox id="chat" checked disabled />
+                          <label htmlFor="chat" className="ml-2 text-sm">Chat Reading</label>
+                        </div>
+                        <div className="flex items-center">
+                          <Checkbox id="voice" checked disabled />
+                          <label htmlFor="voice" className="ml-2 text-sm">Voice Reading</label>
+                        </div>
+                        <div className="flex items-center">
+                          <Checkbox id="video" checked disabled />
+                          <label htmlFor="video" className="ml-2 text-sm">Video Reading</label>
+                        </div>
+                      </div>
+                      <Button variant="outline" size="sm" disabled>
+                        All Types Enabled
+                      </Button>
+                    </div>
                   </div>
                 </div>
               </div>
-              
-              {/* Video Reading Prices */}
-              <div className="mb-6">
-                <h4 className="font-medium mb-2 flex items-center"><Video className="h-4 w-4 mr-2" />Video Readings</h4>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="scheduled-video-15">15 Minutes (cents)</Label>
-                    <Input
-                      id="scheduled-video-15"
-                      type="number"
-                      value={scheduledVideoPrice15}
-                      onChange={(e) => setScheduledVideoPrice15(parseInt(e.target.value) || 0)}
-                      min={0}
-                      placeholder="2499 for $24.99"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="scheduled-video-30">30 Minutes (cents)</Label>
-                    <Input
-                      id="scheduled-video-30"
-                      type="number"
-                      value={scheduledVideoPrice30}
-                      onChange={(e) => setScheduledVideoPrice30(parseInt(e.target.value) || 0)}
-                      min={0}
-                      placeholder="4999 for $49.99"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="scheduled-video-60">60 Minutes (cents)</Label>
-                    <Input
-                      id="scheduled-video-60"
-                      type="number"
-                      value={scheduledVideoPrice60}
-                      onChange={(e) => setScheduledVideoPrice60(parseInt(e.target.value) || 0)}
-                      min={0}
-                      placeholder="9999 for $99.99"
-                    />
-                  </div>
-                </div>
-              </div>
-              
-              <p className="text-xs text-muted-foreground mt-2">
-                Example: 5999 = $59.99 for the entire session
-              </p>
-            </div>
-          </div>
-          <DialogFooter>
-            <DialogClose asChild>
-              <Button variant="outline">Cancel</Button>
-            </DialogClose>
-            <Button 
-              onClick={handleUpdatePricing} 
-              disabled={isUpdatingPricing}
-            >
-              {isUpdatingPricing && (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              )}
-              Save Changes
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Profile Editing Dialog */}
-      <Dialog open={isEditingProfile} onOpenChange={setIsEditingProfile}>
-        <DialogContent className="sm:max-w-[425px]">
-          <DialogHeader>
-            <DialogTitle>Edit Profile</DialogTitle>
-            <DialogDescription>
-              Update your reader profile information.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-4">
-            {/* Profile Image Upload */}
-            <div className="space-y-2">
-              <Label>Profile Image</Label>
-              <div className="flex items-center gap-4">
-                <div 
-                  className="h-20 w-20 rounded-full overflow-hidden bg-muted flex items-center justify-center"
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  {previewImageUrl ? (
-                    <img 
-                      src={previewImageUrl} 
-                      alt="Profile preview" 
-                      className="h-full w-full object-cover" 
-                    />
-                  ) : user?.profileImage ? (
-                    <img 
-                      src={user.profileImage} 
-                      alt={user.fullName} 
-                      className="h-full w-full object-cover" 
-                    />
-                  ) : (
-                    <UserIcon className="h-10 w-10 text-muted-foreground" />
-                  )}
-                </div>
-                <div className="flex-1">
-                  <input
-                    type="file"
-                    ref={fileInputRef}
-                    onChange={handleFileChange}
-                    accept="image/*"
-                    className="hidden"
-                  />
-                  <Button 
-                    variant="outline" 
-                    onClick={() => fileInputRef.current?.click()} 
-                    className="w-full mb-2"
-                  >
-                    Choose Image
-                  </Button>
-                  <p className="text-xs text-muted-foreground">
-                    Upload a professional portrait (max 5MB)
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="username">Username</Label>
-              <Input
-                id="username"
-                value={profileData.username}
-                onChange={(e) => setProfileData(prev => ({
-                  ...prev,
-                  username: e.target.value
-                }))}
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="fullName">Full Name</Label>
-              <Input
-                id="fullName"
-                value={profileData.fullName}
-                onChange={(e) => setProfileData(prev => ({
-                  ...prev,
-                  fullName: e.target.value
-                }))}
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="bio">Bio</Label>
-              <Textarea
-                id="bio"
-                value={profileData.bio}
-                onChange={(e) => setProfileData(prev => ({
-                  ...prev,
-                  bio: e.target.value
-                }))}
-                className="min-h-[100px]"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label>Specialties</Label>
-              <div className="flex flex-wrap gap-2">
-                {profileData.specialties.map((specialty, index) => (
-                  <Badge
-                    key={index}
-                    variant="secondary"
-                    className="cursor-pointer"
-                    onClick={() => {
-                      setProfileData(prev => ({
-                        ...prev,
-                        specialties: prev.specialties.filter((_, i) => i !== index)
-                      }));
-                    }}
-                  >
-                    {specialty}
-                    <X className="w-3 h-3 ml-1" />
-                  </Badge>
-                ))}
-              </div>
-              <Input
-                placeholder="Add a specialty..."
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    const value = (e.target as HTMLInputElement).value.trim();
-                    if (value && !profileData.specialties.includes(value)) {
-                      setProfileData(prev => ({
-                        ...prev,
-                        specialties: [...prev.specialties, value]
-                      }));
-                      (e.target as HTMLInputElement).value = '';
-                    }
-                  }
-                }}
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setIsEditingProfile(false)}>
-              Cancel
-            </Button>
-            <Button onClick={handleUpdateProfile}>
-              Save Changes
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </DashboardLayout>
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
+    </div>
   );
-}
-
-interface ReadingCardProps {
-  reading: Reading;
-  actionLabel?: string;
-}
-
-function ReadingCard({ reading, actionLabel }: ReadingCardProps) {
-  const sessionDate = reading.scheduledFor 
-    ? new Date(reading.scheduledFor)
-    : reading.createdAt 
-      ? new Date(reading.createdAt) 
-      : new Date();
-
-  return (
-    <Card className="glow-card h-full">
-      <CardHeader className="pb-2">
-        <div className="flex flex-col sm:flex-row justify-between items-start gap-2">
-          <CardTitle className="text-lg break-words">{reading.notes || "General Reading"}</CardTitle>
-          <Badge className={`${getStatusColor(reading.status)} whitespace-nowrap`}>
-            {reading.status.replace("_", " ")}
-          </Badge>
-        </div>
-      </CardHeader>
-      <CardContent>
-        <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-1">
-            <span className="text-muted-foreground text-sm">Type:</span>
-            <span className="capitalize text-sm text-right">{reading.type}</span>
-          </div>
-          <div className="grid grid-cols-2 gap-1">
-            <span className="text-muted-foreground text-sm">Date:</span>
-            <span className="text-sm text-right">{sessionDate.toLocaleDateString()}</span>
-          </div>
-          {reading.scheduledFor && (
-            <div className="grid grid-cols-2 gap-1">
-              <span className="text-muted-foreground text-sm">Time:</span>
-              <span className="text-sm text-right">{new Date(reading.scheduledFor).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
-            </div>
-          )}
-          <div className="grid grid-cols-2 gap-1">
-            <span className="text-muted-foreground text-sm">Duration:</span>
-            <span className="text-sm text-right">{reading.duration || "-"} min</span>
-          </div>
-
-          {actionLabel && (
-            <Button 
-              className="w-full mt-4 bg-accent hover:bg-accent-dark text-white"
-              onClick={() => window.location.href = `/reading-session/${reading.id}`}
-            >
-              {actionLabel}
-            </Button>
-          )}
-
-          {reading.status === "in_progress" && (
-            <Button 
-              className="w-full mt-4 bg-purple-500 hover:bg-purple-700 text-white"
-              onClick={() => window.location.href = `/reading-session/${reading.id}`}
-            >
-              Continue Session
-            </Button>
-          )}
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function getStatusColor(status: string): string {
-  const colors = {
-    scheduled: "bg-blue-500",
-    waiting_payment: "bg-yellow-500",
-    payment_completed: "bg-green-500",
-    in_progress: "bg-purple-500",
-    completed: "bg-green-700",
-    cancelled: "bg-red-500",
-  };
-
-  return colors[status as keyof typeof colors] || "bg-gray-500";
 }

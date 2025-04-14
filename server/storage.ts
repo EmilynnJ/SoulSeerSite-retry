@@ -18,7 +18,9 @@ import {
   clientBalances, type ClientBalance, type NewClientBalance,
   readerBalances, type ReaderBalance, type NewReaderBalance,
   conversations, type Conversation, type NewConversation,
-  messages, type Message, type NewMessage
+  messages, type Message, type NewMessage,
+  readerAvailability, type ReaderAvailability, type NewReaderAvailability,
+  appointments, type Appointment, type NewAppointment
 } from "../shared/schema";
 
 import session from "express-session";
@@ -140,6 +142,20 @@ export interface IStorage {
   
   // Session store for authentication
   sessionStore: SessionStore;
+  
+  // Reader Availability
+  createReaderAvailability(availability: NewReaderAvailability): Promise<ReaderAvailability>;
+  getReaderAvailability(readerId: number): Promise<ReaderAvailability[]>;
+  updateReaderAvailability(id: number, availability: Partial<NewReaderAvailability>): Promise<ReaderAvailability | undefined>;
+  deleteReaderAvailability(id: number): Promise<void>;
+  
+  // Appointments
+  createAppointment(appointment: NewAppointment): Promise<Appointment>;
+  getAppointment(id: number): Promise<Appointment | undefined>;
+  getAppointmentsByReader(readerId: number): Promise<Appointment[]>;
+  getAppointmentsByClient(clientId: number): Promise<Appointment[]>;
+  updateAppointment(id: number, appointment: Partial<NewAppointment>): Promise<Appointment | undefined>;
+  cancelAppointment(id: number): Promise<Appointment | undefined>;
 }
 
 /**
@@ -625,6 +641,63 @@ export class PostgresStorage implements IStorage {
       .where(eq(messages.id, messageId))
       .returning();
     return message;
+  }
+  
+  // Reader Availability methods
+  async createReaderAvailability(availabilityData: NewReaderAvailability): Promise<ReaderAvailability> {
+    const [availability] = await db.insert(readerAvailability).values(availabilityData).returning();
+    return availability;
+  }
+  
+  async getReaderAvailability(readerId: number): Promise<ReaderAvailability[]> {
+    return await db.select().from(readerAvailability).where(eq(readerAvailability.readerId, readerId));
+  }
+  
+  async updateReaderAvailability(id: number, availabilityData: Partial<NewReaderAvailability>): Promise<ReaderAvailability | undefined> {
+    const [availability] = await db.update(readerAvailability)
+      .set(availabilityData)
+      .where(eq(readerAvailability.id, id))
+      .returning();
+    return availability;
+  }
+  
+  async deleteReaderAvailability(id: number): Promise<void> {
+    await db.delete(readerAvailability).where(eq(readerAvailability.id, id));
+  }
+  
+  // Appointment methods
+  async createAppointment(appointmentData: NewAppointment): Promise<Appointment> {
+    const [appointment] = await db.insert(appointments).values(appointmentData).returning();
+    return appointment;
+  }
+  
+  async getAppointment(id: number): Promise<Appointment | undefined> {
+    const result = await db.select().from(appointments).where(eq(appointments.id, id));
+    return result[0];
+  }
+  
+  async getAppointmentsByReader(readerId: number): Promise<Appointment[]> {
+    return await db.select().from(appointments).where(eq(appointments.readerId, readerId));
+  }
+  
+  async getAppointmentsByClient(clientId: number): Promise<Appointment[]> {
+    return await db.select().from(appointments).where(eq(appointments.clientId, clientId));
+  }
+  
+  async updateAppointment(id: number, appointmentData: Partial<NewAppointment>): Promise<Appointment | undefined> {
+    const [appointment] = await db.update(appointments)
+      .set(appointmentData)
+      .where(eq(appointments.id, id))
+      .returning();
+    return appointment;
+  }
+  
+  async cancelAppointment(id: number): Promise<Appointment | undefined> {
+    const [appointment] = await db.update(appointments)
+      .set({ status: 'canceled' })
+      .where(eq(appointments.id, id))
+      .returning();
+    return appointment;
   }
 }
 

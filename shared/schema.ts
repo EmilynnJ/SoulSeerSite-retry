@@ -346,3 +346,41 @@ export const insertMessageSchema = createInsertSchema(messages)
 
 export type Message = typeof messages.$inferSelect;
 export type NewMessage = z.infer<typeof insertMessageSchema>;
+
+// Reader Availability table
+export const readerAvailability = pgTable('reader_availability', {
+  id: serial('id').primaryKey(),
+  readerId: integer('reader_id').notNull().references(() => users.id),
+  day: varchar('day', { length: 20 }).notNull(),
+  startTime: varchar('start_time', { length: 10 }).notNull(),
+  endTime: varchar('end_time', { length: 10 }).notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow()
+});
+
+export const insertReaderAvailabilitySchema = createInsertSchema(readerAvailability)
+  .omit({ id: true, createdAt: true, updatedAt: true });
+
+export type ReaderAvailability = typeof readerAvailability.$inferSelect;
+export type NewReaderAvailability = z.infer<typeof insertReaderAvailabilitySchema>;
+
+// Scheduled appointments table
+export const appointments = pgTable('appointments', {
+  id: serial('id').primaryKey(),
+  readerId: integer('reader_id').notNull().references(() => users.id),
+  clientId: integer('client_id').notNull().references(() => users.id),
+  date: varchar('date', { length: 20 }).notNull(),
+  time: varchar('time', { length: 10 }).notNull(),
+  type: varchar('type', { length: 20 }).notNull(),
+  duration: integer('duration').notNull(),
+  notes: text('notes'),
+  status: varchar('status', { length: 20 }).notNull().default('scheduled'),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow()
+});
+
+export const insertAppointmentSchema = createInsertSchema(appointments)
+  .omit({ id: true, status: true, createdAt: true, updatedAt: true });
+
+export type Appointment = typeof appointments.$inferSelect;
+export type NewAppointment = z.infer<typeof insertAppointmentSchema>;
