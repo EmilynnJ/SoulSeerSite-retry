@@ -76,15 +76,15 @@ export function setupAuth(app: Express) {
   const sessionSettings: session.SessionOptions = {
     secret: sessionSecret,
     resave: false,
-    saveUninitialized: true, // Changed to true to save all sessions
+    saveUninitialized: false,
     store: storage.sessionStore,
     cookie: {
-      maxAge: 1000 * 60 * 60 * 24 * 30, // Longer expiration (30 days) for better UX
-      secure: false, // We'll set this based on request in the middleware
-      sameSite: "lax", // Default setting that works for most browsers
-      domain: undefined, // No domain specification for now
-      httpOnly: true // Ensure cookie is only accessible by the server
-    }
+      maxAge: 1000 * 60 * 60 * 24 * 30, // 30 days
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      httpOnly: true
+    },
+    rolling: true // Refresh session with each request
   };
   
   // Log the session configuration for debugging

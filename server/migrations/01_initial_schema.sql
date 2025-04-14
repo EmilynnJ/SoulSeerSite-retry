@@ -123,6 +123,15 @@ CREATE TABLE IF NOT EXISTS messages (
 -- Create sessions table for authentication (used by connect-pg-simple)
 DO $$ 
 BEGIN
+  -- Drop existing constraint if it exists
+  IF EXISTS (
+    SELECT constraint_name 
+    FROM information_schema.table_constraints 
+    WHERE table_name = 'session' AND constraint_name = 'session_pkey'
+  ) THEN
+    ALTER TABLE "session" DROP CONSTRAINT "session_pkey";
+  END IF;
+
   -- Create the session table if it doesn't exist
   IF NOT EXISTS (SELECT FROM pg_tables WHERE tablename = 'session') THEN
     CREATE TABLE "session" (
@@ -130,22 +139,16 @@ BEGIN
       "sess" json NOT NULL,
       "expire" timestamp(6) NOT NULL
     ) WITH (OIDS=FALSE);
-    
-    -- Add primary key if it doesn't exist
-    IF NOT EXISTS (
-      SELECT constraint_name 
-      FROM information_schema.table_constraints 
-      WHERE table_name = 'session' AND constraint_type = 'PRIMARY KEY'
-    ) THEN
-      ALTER TABLE "session" ADD CONSTRAINT "session_pkey" PRIMARY KEY ("sid") NOT DEFERRABLE INITIALLY IMMEDIATE;
-    END IF;
-    
-    -- Add index if it doesn't exist
-    IF NOT EXISTS (
-      SELECT 1 FROM pg_indexes WHERE tablename = 'session' AND indexname = 'IDX_session_expire'
-    ) THEN
-      CREATE INDEX "IDX_session_expire" ON "session" ("expire");
-    END IF;
+  END IF;
+
+  -- Add primary key
+  ALTER TABLE "session" ADD CONSTRAINT "session_pkey" PRIMARY KEY ("sid") NOT DEFERRABLE INITIALLY IMMEDIATE;
+
+  -- Add index if it doesn't exist
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_indexes WHERE tablename = 'session' AND indexname = 'IDX_session_expire'
+  ) THEN
+    CREATE INDEX "IDX_session_expire" ON "session" ("expire");
   END IF;
 END $$;
 
