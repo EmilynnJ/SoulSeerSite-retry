@@ -65,25 +65,48 @@ async function hashPassword(password: string): Promise<string> {
 
 // Password comparison supporting both bcrypt and legacy scrypt hashes
 async function comparePasswords(supplied: string, stored: string): Promise<boolean> {
+  console.log(`🔐 Password comparison started`);
+  console.log(`🔐 Supplied password length: ${supplied?.length}`);
+  console.log(`🔐 Stored hash starts with: ${stored.substring(0, 6)}... (length: ${stored?.length})`);
+  
   // Check if it's a bcrypt hash
   if (stored.startsWith('$2b$') || stored.startsWith('$2a$')) {
+    console.log(`🔐 Using bcrypt comparison`);
     try {
-      return await bcrypt.compare(supplied, stored);
+      const result = await bcrypt.compare(supplied, stored);
+      console.log(`🔐 bcrypt comparison result: ${result}`);
+      return result;
     } catch (error) {
+      console.error(`🔐 Error comparing passwords with bcrypt:`, error);
       log(`Error comparing passwords with bcrypt: ${error}`, 'auth');
       return false;
     }
-  }
-  
-  // Legacy password comparison using scrypt
-  try {
-    const [hashed, salt] = stored.split(".");
-    const hashedBuf = Buffer.from(hashed, "hex");
-    const suppliedBuf = (await scryptAsync(supplied, salt, 64)) as Buffer;
-    return timingSafeEqual(hashedBuf, suppliedBuf);
-  } catch (error) {
-    log(`Error comparing passwords with scrypt: ${error}`, 'auth');
-    return false;
+  } else if (stored.includes('.')) { 
+    // Legacy password comparison using scrypt (if the hash contains a dot)
+    console.log(`🔐 Using legacy scrypt comparison`);
+    try {
+      const [hashed, salt] = stored.split(".");
+      console.log(`🔐 scrypt hash parts - hashed: ${hashed.substring(0, 6)}..., salt: ${salt.substring(0, 6)}...`);
+      
+      const hashedBuf = Buffer.from(hashed, "hex");
+      const suppliedBuf = (await scryptAsync(supplied, salt, 64)) as Buffer;
+      
+      const result = timingSafeEqual(hashedBuf, suppliedBuf);
+      console.log(`🔐 scrypt comparison result: ${result}`);
+      return result;
+    } catch (error) {
+      console.error(`🔐 Error comparing passwords with scrypt:`, error);
+      log(`Error comparing passwords with scrypt: ${error}`, 'auth');
+      return false;
+    }
+  } else {
+    // Handle plain text passwords (for testing only, should not be in production)
+    console.log(`🔐 WARNING: Falling back to plain text comparison - this should not be used in production!`);
+    console.log(`🔐 Supplied: "${supplied}", Stored: "${stored}"`);
+    
+    const result = supplied === stored;
+    console.log(`🔐 Plain text comparison result: ${result}`);
+    return result;
   }
 }
 
@@ -128,27 +151,45 @@ export function setupAuth(app: Express): void {
   passport.use(
     new LocalStrategy(async (username, password, done) => {
       try {
+        console.log("⭐ Authentication attempt started");
+        console.log(`⭐ Credentials: Username/Email=${username}, Password length=${password?.length}`);
+        
         // Check if input is email or username
         const isEmail = username.includes('@');
+        console.log(`⭐ Identified input as: ${isEmail ? 'email' : 'username'}`);
+        
         let user: SelectUser | undefined;
         
         try {
           if (isEmail) {
             // Find user by email in PostgreSQL
+            console.log(`⭐ Searching for user by email in PostgreSQL: ${username.toLowerCase()}`);
             const results = await db.select().from(users).where(eq(users.email, username.toLowerCase())).limit(1);
+            console.log(`⭐ PostgreSQL email search results:`, results);
+            
             user = results[0];
             if (user) {
+              console.log(`⭐ Found user in PostgreSQL by email: ${user.email} (ID: ${user.id})`);
               log(`Found user in PostgreSQL by email: ${user.email}`, 'auth');
+            } else {
+              console.log(`⭐ No user found with email: ${username.toLowerCase()}`);
             }
           } else {
             // Find user by username in PostgreSQL (case insensitive)
+            console.log(`⭐ Searching for user by username in PostgreSQL: ${username}`);
             const results = await db.select().from(users).where(ilike(users.username, username)).limit(1);
+            console.log(`⭐ PostgreSQL username search results:`, results);
+            
             user = results[0];
             if (user) {
+              console.log(`⭐ Found user in PostgreSQL by username: ${user.username} (ID: ${user.id})`);
               log(`Found user in PostgreSQL by username: ${user.username}`, 'auth');
+            } else {
+              console.log(`⭐ No user found with username: ${username}`);
             }
           }
         } catch (dbError) {
+          console.error(`⭐ PostgreSQL error during user search:`, dbError);
           log(`Error finding user in PostgreSQL: ${dbError}`, 'auth');
           return done(dbError);
         }
@@ -158,8 +199,14 @@ export function setupAuth(app: Express): void {
           return done(null, false, { message: "Invalid credentials" });
         }
         
+        console.log(`⭐ Attempting to validate password for user: ${username} (ID: ${user.id})`);
+        console.log(`⭐ Password hash format: ${user.password.substring(0, 8)}... (length: ${user.password.length})`);
+        
         const passwordValid = await comparePasswords(password, user.password);
+        console.log(`⭐ Password comparison result: ${passwordValid ? 'VALID' : 'INVALID'}`);
+        
         if (!passwordValid) {
+          console.log(`⭐ Authentication failed: Password mismatch for ${username}`);
           log(`Invalid password for user: ${username}`, 'auth');
           return done(null, false, { message: "Invalid credentials" });
         }
@@ -299,13 +346,31 @@ export function setupAuth(app: Express): void {
 
   // Login endpoint
   app.post("/api/login", (req: Request, res: Response, next: NextFunction) => {
+    console.log("Login attempt received:", { 
+      username: req.body.username, 
+      hasPassword: !!req.body.password 
+    });
+    
     // Clear any existing session
     req.logout((err) => {
-      if (err) return next(err);
+      if (err) {
+        console.error("Logout error during login:", err);
+        return next(err);
+      }
+      
+      console.log("Existing session cleared, attempting authentication");
       
       passport.authenticate("local", (err: any, user: Express.User | false, info: { message?: string } | undefined) => {
-        if (err) return next(err);
-        if (!user) return res.status(401).json({ message: info?.message || "Invalid username or password" });
+        if (err) {
+          console.error("Authentication error:", err);
+          return next(err);
+        }
+        if (!user) {
+          console.log("Authentication failed:", info?.message || "Invalid credentials");
+          return res.status(401).json({ message: info?.message || "Invalid username or password" });
+        }
+        
+        console.log("User authenticated successfully:", { id: user.id, username: user.username });
       
         // Check if the request is from a mobile client via User-Agent
         const userAgent = req.headers['user-agent'] || '';
