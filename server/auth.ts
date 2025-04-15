@@ -213,18 +213,22 @@ export function setupAuth(app: Express): void {
           return done(null, false, { message: "Invalid credentials" });
         }
         
-        // Update last active time in PostgreSQL
+        // Update last active time and ensure isVerified is set to true in PostgreSQL
         try {
           await db.update(users)
             .set({ 
               lastActive: new Date(),
-              isOnline: true 
+              isOnline: true,
+              isVerified: true // Ensure isVerified is true for any user who can login
             })
             .where(eq(users.id, user.id));
             
-          log(`Updated user last active time in PostgreSQL: ${user.username}`, 'auth');
+          log(`Updated user last active time and isVerified in PostgreSQL: ${user.username}`, 'auth');
+          
+          // Make sure our user object has isVerified set to true for the session
+          user.isVerified = true;
         } catch (updateError) {
-          log(`Error updating user last active time: ${updateError}`, 'auth');
+          log(`Error updating user data: ${updateError}`, 'auth');
           // Continue even if update fails
         }
         
