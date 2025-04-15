@@ -54,31 +54,59 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.log("Attempting login with credentials:", { username: credentials.username, passwordLength: credentials.password.length });
       
       try {
+        // First, attempt direct login with credentials
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+        const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
         
-        const res = await fetch("/api/login", {
+        // Add a timestamp to prevent caching issues
+        const timestamp = new Date().getTime();
+        
+        const res = await fetch(`/api/login?_=${timestamp}`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { 
+            "Content-Type": "application/json",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0"
+          },
           body: JSON.stringify(credentials),
-          credentials: "include",
+          credentials: "include", // Important for cookies
           signal: controller.signal
         });
         
         clearTimeout(timeoutId);
         
         if (!res.ok) {
-          const errorText = await res.text();
-          console.error(`Login failed with status ${res.status}: ${errorText}`);
-          throw new Error(errorText || "Invalid username or password");
+          // Try to get detailed error message
+          let errorMessage = "Invalid username or password";
+          try {
+            const errorData = await res.json();
+            errorMessage = errorData.message || errorMessage;
+          } catch (e) {
+            try {
+              errorMessage = await res.text() || errorMessage;
+            } catch (e2) {
+              // Fallback to default error message
+            }
+          }
+          
+          console.error(`Login failed with status ${res.status}: ${errorMessage}`);
+          throw new Error(errorMessage);
         }
         
         const userData = await res.json();
-        console.log("Login successful, user data received:", { id: userData.id, username: userData.username, role: userData.role });
+        console.log("Login successful, user data received:", { 
+          id: userData.id, 
+          username: userData.username, 
+          role: userData.role,
+          isAuthenticated: userData.isAuthenticated || false,
+          sessionID: userData.sessionID || null
+        });
+        
         return userData;
       } catch (err) {
         console.error("Login fetch error:", err);
-        throw new Error("Login failed - please try again");
+        throw new Error(err instanceof Error ? err.message : "Login failed - please try again");
       }
     },
     onSuccess: (user: User) => {

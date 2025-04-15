@@ -122,14 +122,16 @@ export function setupAuth(app: Express): void {
   // For non-production environments accessing through mobile apps, we need this combination
   const sessionSettings: session.SessionOptions = {
     secret: sessionSecret,
-    resave: false,
-    saveUninitialized: false,
+    resave: true, // Changed to true to ensure session gets saved
+    saveUninitialized: true, // Changed to true to create session for every user
     store: storage.sessionStore,
+    name: 'soulseer.sid', // Explicit cookie name
     cookie: {
       maxAge: 1000 * 60 * 60 * 24 * 30, // 30 days
-      secure: process.env.NODE_ENV === 'production',
+      secure: false, // Set to false in development for simplicity
       sameSite: 'lax',
-      httpOnly: true
+      httpOnly: true,
+      path: '/'
     },
     rolling: true // Refresh session with each request
   };
@@ -351,100 +353,92 @@ export function setupAuth(app: Express): void {
       hasPassword: !!req.body.password 
     });
     
-    // Clear any existing session
-    req.logout((err) => {
+    // Directly attempt authentication 
+    passport.authenticate("local", (err: any, user: Express.User | false, info: { message?: string } | undefined) => {
       if (err) {
-        console.error("Logout error during login:", err);
+        console.error("Authentication error:", err);
         return next(err);
       }
       
-      console.log("Existing session cleared, attempting authentication");
+      if (!user) {
+        console.log("Authentication failed:", info?.message || "Invalid credentials");
+        return res.status(401).json({ message: info?.message || "Invalid username or password" });
+      }
       
-      passport.authenticate("local", (err: any, user: Express.User | false, info: { message?: string } | undefined) => {
-        if (err) {
-          console.error("Authentication error:", err);
-          return next(err);
-        }
-        if (!user) {
-          console.log("Authentication failed:", info?.message || "Invalid credentials");
-          return res.status(401).json({ message: info?.message || "Invalid username or password" });
-        }
-        
-        console.log("User authenticated successfully:", { id: user.id, username: user.username });
+      console.log("User authenticated successfully:", { id: user.id, username: user.username });
+    
+      // Check if the request is from a mobile client via User-Agent
+      const userAgent = req.headers['user-agent'] || '';
+      const isMobileClient = /android|iphone|ipad|ipod|webos|mobile/i.test(userAgent);
       
-        // Check if the request is from a mobile client via User-Agent
-        const userAgent = req.headers['user-agent'] || '';
-        const isMobileClient = /android|iphone|ipad|ipod|webos|mobile/i.test(userAgent);
-        
-        console.log(`Login request from ${isMobileClient ? 'mobile' : 'desktop'} client: ${userAgent}`);
+      console.log(`Login request from ${isMobileClient ? 'mobile' : 'desktop'} client: ${userAgent}`);
 
-        // Special cookie handling for mobile clients
-        if (isMobileClient && req.session && req.session.cookie) {
-          console.log("Setting mobile-friendly cookie parameters");
-          
-          // Check if the connection is HTTPS
-          const origin = req.headers.origin || '';
-          const isHttps = origin.startsWith('https:') || req.secure;
-          
-          if (isHttps) {
-            // If HTTPS, set SameSite=None with Secure=true for cross-site functionality
-            // This works best with WebViews and cross-origin requests
-            req.session.cookie.sameSite = "none";
-            req.session.cookie.secure = true; // Required for SameSite=None
-          } else {
-            // For HTTP development environment, use a more permissive approach
-            // This won't be as secure, but works better for development testing
-            req.session.cookie.sameSite = "lax";
-            req.session.cookie.secure = false;
-          }
-          
-          // Extended session timeout for mobile users
-          req.session.cookie.maxAge = 1000 * 60 * 60 * 24 * 30; // 30 days for mobile
-          
-          // Log the cookie settings applied
-          console.log(`Cookie settings for mobile: sameSite=${req.session.cookie.sameSite}, secure=${req.session.cookie.secure}, maxAge=${req.session.cookie.maxAge}, isHttps=${isHttps}`);
+      // Special cookie handling for mobile clients
+      if (isMobileClient && req.session && req.session.cookie) {
+        console.log("Setting mobile-friendly cookie parameters");
+        
+        // Check if the connection is HTTPS
+        const origin = req.headers.origin || '';
+        const isHttps = origin.startsWith('https:') || req.secure;
+        
+        if (isHttps) {
+          // If HTTPS, set SameSite=None with Secure=true for cross-site functionality
+          // This works best with WebViews and cross-origin requests
+          req.session.cookie.sameSite = "none";
+          req.session.cookie.secure = true; // Required for SameSite=None
+        } else {
+          // For HTTP development environment, use a more permissive approach
+          // This won't be as secure, but works better for development testing
+          req.session.cookie.sameSite = "lax";
+          req.session.cookie.secure = false;
         }
         
-        req.login(user, (err: any) => {
-          if (err) return next(err);
+        // Extended session timeout for mobile users
+        req.session.cookie.maxAge = 1000 * 60 * 60 * 24 * 30; // 30 days for mobile
+        
+        // Log the cookie settings applied
+        console.log(`Cookie settings for mobile: sameSite=${req.session.cookie.sameSite}, secure=${req.session.cookie.secure}, maxAge=${req.session.cookie.maxAge}, isHttps=${isHttps}`);
+      }
+      
+      req.login(user, (err: any) => {
+        if (err) return next(err);
+        
+        // Create a new object from user data without the password
+        const { password: pwd, ...userResponse } = user;
+        
+        // Add cache headers to prevent client-side caching
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+        res.setHeader('Surrogate-Control', 'no-store');
+        
+        // Set additional connection reuse headers for mobile apps
+        if (isMobileClient) {
+          res.setHeader('Connection', 'keep-alive');
           
-          // Create a new object from user data without the password
-          const { password: pwd, ...userResponse } = user;
+          // Set a session ID in response header that the mobile app can save and reuse
+          // Mobile app should include this in subsequent requests in Authorization header
+          const sessionID = req.sessionID;
+          res.setHeader('X-Session-ID', sessionID);
           
-          // Add cache headers to prevent client-side caching
-          res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-          res.setHeader('Pragma', 'no-cache');
-          res.setHeader('Expires', '0');
-          res.setHeader('Surrogate-Control', 'no-store');
-          
-          // Set additional connection reuse headers for mobile apps
-          if (isMobileClient) {
-            res.setHeader('Connection', 'keep-alive');
-            
-            // Set a session ID in response header that the mobile app can save and reuse
-            // Mobile app should include this in subsequent requests in Authorization header
-            const sessionID = req.sessionID;
-            res.setHeader('X-Session-ID', sessionID);
-            
-            console.log(`Set X-Session-ID header: ${sessionID}`);
-          }
-          
-          // Return user data
-          res.status(200).json({
-            ...userResponse,
-            // Include authentication status in the response
-            isAuthenticated: true,
-            // Include a timestamp to help debug sessions
-            authenticatedAt: new Date().toISOString(),
-            // Include session info for mobile devices
-            ...(isMobileClient && { 
-              sessionID: req.sessionID,
-              isMobileSession: true 
-            })
-          });
+          console.log(`Set X-Session-ID header: ${sessionID}`);
+        }
+        
+        // Return user data
+        res.status(200).json({
+          ...userResponse,
+          // Include authentication status in the response
+          isAuthenticated: true,
+          // Include a timestamp to help debug sessions
+          authenticatedAt: new Date().toISOString(),
+          // Include session info for mobile devices
+          ...(isMobileClient && { 
+            sessionID: req.sessionID,
+            isMobileSession: true 
+          })
         });
-      })(req, res, next);
-    });
+      });
+    })(req, res, next);
   });
 
   // Logout endpoint
@@ -456,62 +450,91 @@ export function setupAuth(app: Express): void {
   });
 
   // Current user endpoint
-  app.get("/api/user", (req: Request, res: Response) => {
+  app.get("/api/user", async (req: Request, res: Response) => {
+    console.log("GET /api/user received, checking authentication");
+    console.log(`User authenticated: ${req.isAuthenticated()}`);
+    console.log(`Session ID: ${req.sessionID}`);
+    
+    // Add debug headers to check what's being sent back
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    
     // Check for standard session authentication
     if (req.isAuthenticated()) {
       // Create a new object from user data without the password
       const { password: pwd, ...userResponse } = req.user as SelectUser;
-      return res.json(userResponse);
+      console.log("User is authenticated, returning user data for:", userResponse.username);
+      return res.json({
+        ...userResponse,
+        isAuthenticated: true,
+        sessionID: req.sessionID
+      });
     }
     
-    // Check for mobile session authentication via header
-    const sessionId = req.headers['x-session-id'] || req.headers['authorization']?.replace('Bearer ', '');
+    // Check for auth in headers (JWT, session ID, etc.)
+    const authHeader = req.headers.authorization;
+    const sessionId = req.headers['x-session-id'] || 
+                    (authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : null) ||
+                    (req.cookies && req.cookies['soulseer.sid']);
     
     if (sessionId) {
-      log(`Attempting to restore session from X-Session-ID: ${sessionId}`, 'auth');
+      console.log(`Attempting to restore session from alternative auth: ${sessionId.substring(0, 10)}...`);
       
       // Try to restore the session from store
-      storage.sessionStore.get(sessionId as string, async (err: any, session: any) => {
-        if (err || !session || !session.passport || !session.passport.user) {
+      try {
+        const sessionPromise = new Promise((resolve, reject) => {
+          storage.sessionStore.get(sessionId as string, (storeErr: any, session: any) => {
+            if (storeErr) {
+              console.log("Session retrieval error:", storeErr);
+              return reject(storeErr);
+            }
+            resolve(session);
+          });
+        });
+        
+        const session = await sessionPromise as any;
+        
+        if (!session || !session.passport || !session.passport.user) {
           log('Invalid or expired session ID', 'auth');
           return res.sendStatus(401);
         }
         
+        // Get the user from the session's passport data
+        const userId = session.passport.user;
+        
         try {
-          // Get the user from the session's passport data
-          const userId = session.passport.user;
+          log(`Finding user in PostgreSQL with ID: ${userId}`, 'auth');
           
-          try {
-            log(`Finding user in PostgreSQL with ID: ${userId}`, 'auth');
+          // Find the user in PostgreSQL
+          const results = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+          const user = results[0];
+          
+          if (user) {
+            // Restore the session
+            (req.session as any).passport = session.passport;
+            req.session.save();
             
-            // Find the user in PostgreSQL
-            const results = await db.select().from(users).where(eq(users.id, userId)).limit(1);
-            const user = results[0];
+            // Create a new object from user data without the password
+            const { password: pwd, ...userResponse } = user;
+            log(`Successfully restored session for user ${user.username} from PostgreSQL`, 'auth');
             
-            if (user) {
-              // Restore the session
-              req.session.passport = session.passport;
-              req.session.save();
-              
-              // Create a new object from user data without the password
-              const { password: pwd, ...userResponse } = user;
-              log(`Successfully restored session for user ${user.username} from PostgreSQL`, 'auth');
-              
-              // Update the user's last active time
-              await db.update(users)
-                .set({ lastActive: new Date(), isOnline: true })
-                .where(eq(users.id, userId));
-              
-              return res.json({
-                ...userResponse,
-                sessionRestored: true
-              });
-            }
-          } catch (dbError) {
-            log(`Error finding user in PostgreSQL: ${dbError}`, 'auth');
+            // Update the user's last active time
+            await db.update(users)
+              .set({ lastActive: new Date(), isOnline: true })
+              .where(eq(users.id, userId));
+            
+            return res.json({
+              ...userResponse,
+              sessionRestored: true
+            });
           }
-          
-          // Fall back to traditional storage
+        } catch (dbError) {
+          log(`Error finding user in PostgreSQL: ${dbError}`, 'auth');
+        }
+        
+        // Fall back to traditional storage
+        try {
           const user = await storage.getUser(userId);
           
           if (!user) {
@@ -520,7 +543,7 @@ export function setupAuth(app: Express): void {
           }
           
           // Restore the session
-          req.session.passport = session.passport;
+          (req.session as any).passport = session.passport;
           req.session.save();
           
           // Create a new object from user data without the password
@@ -532,13 +555,14 @@ export function setupAuth(app: Express): void {
             sessionRestored: true,
             source: 'traditional'
           });
-        } catch (error) {
-          log(`Error restoring session: ${error}`, 'auth');
+        } catch (storageError) {
+          log(`Error getting user from storage: ${storageError}`, 'auth');
           return res.sendStatus(401);
         }
-      });
-      
-      return; // Important to prevent the function from continuing
+      } catch (sessionError) {
+        log(`Session restoration error: ${sessionError}`, 'auth');
+        return res.sendStatus(401);
+      }
     }
     
     // No valid authentication found

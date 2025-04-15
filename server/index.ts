@@ -21,11 +21,27 @@ app.use(express.urlencoded({ extended: false }));
 
 // Configure CORS based on environment
 const corsOptions = {
-  // Using '*' for development; should be restricted in production
-  origin: '*',
+  // Using allowed origins with credentials support
+  origin: (origin: string | undefined, callback: (err: Error | null, origin?: string | boolean) => void) => {
+    // Allow localhost and the Replit environment
+    const allowedOrigins = [
+      'http://localhost:5000',
+      'https://localhost:5000',
+      'https://soulseer.app',
+      undefined // Allow requests with no origin (like mobile apps or Postman)
+    ];
+    
+    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, origin);
+    } else {
+      // For development, allow any origin
+      console.log(`CORS: Allowing origin ${origin}`);
+      callback(null, origin);
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'Cookie', 'X-Requested-With']
+  allowedHeaders: ['Content-Type', 'Authorization', 'Cookie', 'X-Requested-With', 'X-Session-ID']
 };
 app.use(cors(corsOptions));
 
