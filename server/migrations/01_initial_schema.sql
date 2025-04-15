@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS users (
   password VARCHAR(255) NOT NULL,
   role VARCHAR(20) NOT NULL DEFAULT 'client',
   full_name VARCHAR(100) NOT NULL,
+  is_verified BOOLEAN DEFAULT FALSE,
   bio TEXT,
   profile_image VARCHAR(255),
   specialties TEXT[],
