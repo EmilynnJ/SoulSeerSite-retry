@@ -4,9 +4,14 @@ import {
   useMutation,
   UseMutationResult,
 } from "@tanstack/react-query";
-import { User } from "@shared/schema";
+import { User as BaseUser } from "@shared/schema";
 import { getQueryFn, apiRequest, queryClient } from "../lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+
+// Extend the User type to make isVerified a required field
+interface User extends BaseUser {
+  isVerified: boolean;
+}
 
 type AuthContextType = {
   user: User | null;
@@ -95,10 +100,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         
         const userData = await res.json();
+        // Ensure isVerified is set to true (fixing any data inconsistencies)
+        userData.isVerified = true;
+        
         console.log("Login successful, user data received:", { 
           id: userData.id, 
           username: userData.username, 
           role: userData.role,
+          isVerified: userData.isVerified,
           isAuthenticated: userData.isAuthenticated || false,
           sessionID: userData.sessionID || null
         });

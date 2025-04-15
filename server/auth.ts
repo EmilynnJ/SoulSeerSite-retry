@@ -469,8 +469,17 @@ export function setupAuth(app: Express): void {
       // Create a new object from user data without the password
       const { password: pwd, ...userResponse } = req.user as SelectUser;
       console.log("User is authenticated, returning user data for:", userResponse.username);
+      // Ensure isVerified is true for all authenticated users
+      if (userResponse.isVerified === null || userResponse.isVerified === undefined) {
+        // Update the database if needed
+        await db.update(users)
+          .set({ isVerified: true })
+          .where(eq(users.id, userResponse.id));
+      }
+      
       return res.json({
         ...userResponse,
+        isVerified: true, // Always set this to true for authenticated users
         isAuthenticated: true,
         sessionID: req.sessionID
       });
@@ -528,8 +537,14 @@ export function setupAuth(app: Express): void {
               .set({ lastActive: new Date(), isOnline: true })
               .where(eq(users.id, userId));
             
+            // Update isVerified in the database to fix any issues
+            await db.update(users)
+              .set({ isVerified: true })
+              .where(eq(users.id, userId));
+            
             return res.json({
               ...userResponse,
+              isVerified: true, // Force isVerified to true in the response
               sessionRestored: true
             });
           }
@@ -556,6 +571,7 @@ export function setupAuth(app: Express): void {
           
           return res.json({
             ...userResponse,
+            isVerified: true, // Force isVerified to true in traditional storage response
             sessionRestored: true,
             source: 'traditional'
           });

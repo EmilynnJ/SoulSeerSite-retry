@@ -17,7 +17,7 @@ export const users = pgTable('users', {
   role: varchar('role', { length: 50 }).notNull().default('user'),
   profileImage: varchar('profile_image', { length: 255 }),
   bio: text('bio'),
-  isVerified: boolean('is_verified').default(false),
+  isVerified: boolean('is_verified').notNull().default(false),
   isOnline: boolean('is_online').default(false),
   isAvailable: boolean('is_available').default(false),
   stripeCustomerId: varchar('stripe_customer_id', { length: 255 }),
