@@ -23,7 +23,7 @@ declare global {
       role: string;
       profileImage: string | null;
       bio: string | null;
-      isVerified: boolean | null;
+      isVerified: boolean; // Not nullable - always set to true for logged in users
       isOnline: boolean | null;
       isAvailable: boolean | null;
       stripeCustomerId: string | null;
@@ -120,19 +120,28 @@ export function setupAuth(app: Express): void {
   // For mobile app compatibility, we need special cookie settings
   // SameSite=None is required for cookies to work in WebViews, but this requires Secure=true
   // For non-production environments accessing through mobile apps, we need this combination
+  // Handle cookie settings for development environment (Replit)
+  // In development, we often access the app from different domains
+  const cookieSettings = {
+    maxAge: 1000 * 60 * 60 * 24 * 30, // 30 days
+    secure: process.env.NODE_ENV === 'production', // Only secure in production
+    sameSite: process.env.NODE_ENV === 'production' ? 'lax' : 'none' as 'lax' | 'none', // Allow cross-site in dev
+    httpOnly: true,
+    path: '/'
+  };
+  
+  // If using 'none' for sameSite, secure must be true, even in development
+  if (cookieSettings.sameSite === 'none') {
+    cookieSettings.secure = true;
+  }
+  
   const sessionSettings: session.SessionOptions = {
     secret: sessionSecret,
     resave: true, // Changed to true to ensure session gets saved
     saveUninitialized: true, // Changed to true to create session for every user
     store: storage.sessionStore,
     name: 'soulseer.sid', // Explicit cookie name
-    cookie: {
-      maxAge: 1000 * 60 * 60 * 24 * 30, // 30 days
-      secure: false, // Set to false in development for simplicity
-      sameSite: 'lax',
-      httpOnly: true,
-      path: '/'
-    },
+    cookie: cookieSettings,
     rolling: true // Refresh session with each request
   };
   
