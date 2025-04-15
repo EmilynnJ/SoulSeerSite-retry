@@ -224,13 +224,16 @@ export function setupAuth(app: Express): void {
         
         // Update last active time and ensure isVerified is set to true in PostgreSQL
         try {
-          await db.update(users)
-            .set({ 
-              lastActive: new Date(),
-              isOnline: true,
-              isVerified: true // Ensure isVerified is true for any user who can login
-            })
-            .where(eq(users.id, user.id));
+          // Use SQL directly to avoid ORM column mapping issues
+          await db.execute(`
+            UPDATE users 
+            SET last_active = NOW(), 
+                is_online = TRUE, 
+                is_verified = TRUE 
+            WHERE id = $1
+          `, [user.id]);
+          
+          console.log(`Updated user (ID: ${user.id}) with direct SQL: last_active=NOW(), is_online=TRUE, is_verified=TRUE`);
             
           log(`Updated user last active time and isVerified in PostgreSQL: ${user.username}`, 'auth');
           
@@ -480,10 +483,14 @@ export function setupAuth(app: Express): void {
       console.log("User is authenticated, returning user data for:", userResponse.username);
       // Ensure isVerified is true for all authenticated users
       if (userResponse.isVerified === null || userResponse.isVerified === undefined) {
-        // Update the database if needed
-        await db.update(users)
-          .set({ isVerified: true })
-          .where(eq(users.id, userResponse.id));
+        // Update the database directly with SQL to avoid ORM column mapping issues
+        await db.execute(`
+          UPDATE users 
+          SET is_verified = TRUE 
+          WHERE id = $1
+        `, [userResponse.id]);
+        
+        console.log(`Updated user isVerified (ID: ${userResponse.id}) with direct SQL: is_verified=TRUE`);
       }
       
       return res.json({
@@ -541,15 +548,24 @@ export function setupAuth(app: Express): void {
             const { password: pwd, ...userResponse } = user;
             log(`Successfully restored session for user ${user.username} from PostgreSQL`, 'auth');
             
-            // Update the user's last active time
-            await db.update(users)
-              .set({ lastActive: new Date(), isOnline: true })
-              .where(eq(users.id, userId));
+            // Update the user's last active time and online status with direct SQL
+            await db.execute(`
+              UPDATE users 
+              SET last_active = NOW(), 
+                  is_online = TRUE
+              WHERE id = $1
+            `, [userId]);
             
-            // Update isVerified in the database to fix any issues
-            await db.update(users)
-              .set({ isVerified: true })
-              .where(eq(users.id, userId));
+            console.log(`Updated user (ID: ${userId}) with direct SQL: last_active=NOW(), is_online=TRUE`);
+            
+            // Update isVerified in the database directly with SQL
+            await db.execute(`
+              UPDATE users 
+              SET is_verified = TRUE 
+              WHERE id = $1
+            `, [userId]);
+            
+            console.log(`Updated user isVerified (ID: ${userId}) with direct SQL: is_verified=TRUE`);
             
             return res.json({
               ...userResponse,
