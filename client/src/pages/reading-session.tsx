@@ -5,7 +5,7 @@ import { useAuth } from '@/hooks/use-auth';
 import { useToast } from '@/hooks/use-toast';
 import { useWebSocketContext } from '@/hooks/websocket-provider';
 import { Reading } from '@shared/schema';
-import { VideoCallMux } from '@/components/readings/video-call-mux';
+// import { VideoCallMux } from '@/components/readings/video-call-mux'; // Mux component removed
 import { apiRequest } from '@/lib/queryClient';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -364,13 +364,7 @@ export default function ReadingSessionPage() {
             {/* Video Call UI */}
             {reading.type === 'video' && (
               <TabsContent value="video" className="h-[400px]">
-                <VideoCallMux
-                  reading={reading}
-                  user={user}
-                  isReader={isReader}
-                  onEndCall={handleEndReading}
-                  onTimerUpdate={handleTimerUpdate}
-                />
+                <div>Video call UI placeholder</div>
               </TabsContent>
             )}
             
