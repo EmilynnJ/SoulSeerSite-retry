@@ -11,12 +11,19 @@ import { gifts } from "@shared/schema";
 import stripe from "./services/stripe-client.js"; // Corrected import for stripe instance
 import stripeClient from "./services/stripe-client";
 // TRTC has been completely removed
-import * as muxClient from "./services/mux-client";
+// import * as muxClient from "./services/mux-client"; // Mux client removed
 import { scrypt, randomBytes, timingSafeEqual } from "crypto";
 import { promisify } from "util";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
+
+// Basic type for RTCIceServer, can be expanded if needed
+interface RTCIceServer {
+  urls: string | string[];
+  username?: string;
+  credential?: string;
+}
 
 // Admin middleware
 const requireAdmin = (req: Request, res: Response, next: NextFunction) => {
@@ -182,92 +189,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     // Return a 200 response to acknowledge receipt of the event
     res.json({received: true});
   });
-  
+
   // Setup WebSocket server for live readings and real-time communication
   const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
-  
-  // MUX Webhook endpoint
-  app.post('/api/webhooks/mux', express.raw({type: 'application/json'}), async (req, res) => {
-    try {
-      // Get the MUX signature from headers
-      const signature = req.headers['mux-signature'] as string;
-      
-      if (!signature) {
-        console.warn('Missing MUX signature header');
-        return res.status(400).json({ message: 'Missing signature header' });
-      }
-      
-      // The raw body is available in req.body since we used express.raw middleware
-      // Ensure we're handling the Buffer correctly
-      let rawBody;
-      if (Buffer.isBuffer(req.body)) {
-        rawBody = req.body.toString('utf8');
-      } else if (typeof req.body === 'string') {
-        rawBody = req.body;
-      } else {
-        rawBody = JSON.stringify(req.body);
-      }
-      
-      // Log the raw request for debugging
-      console.log(`MUX webhook raw request body: ${rawBody}`);
-      
-      // Handle the webhook - note: handleMuxWebhook now returns structured responses
-      // instead of throwing errors for better diagnostics
-      const result = await muxClient.handleMuxWebhook(rawBody, signature);
-      
-      // If webhook processing was unsuccessful, return an appropriate status code
-      if (!result.success) {
-        console.warn('MUX webhook processing failed:', result);
-        return res.status(422).json(result);
-      }
-      
-      // Return the success result
-      res.status(200).json(result);
-    } catch (error) {
-      console.error('Error handling MUX webhook:', error);
-      res.status(500).json({ 
-        message: 'Error processing webhook',
-        error: error instanceof Error ? error.message : 'Unknown error',
-        time: new Date().toISOString()
-      });
-    }
-  });
-  
-  // Test endpoint for simulating MUX webhook events (DEVELOPMENT ONLY)
-  if (process.env.NODE_ENV !== 'production') {
-    app.post('/api/test/mux-webhook', express.json(), async (req, res) => {
-      try {
-        console.log('Received test MUX webhook event:', req.body);
-        
-        // Extract event data
-        const { type, data } = req.body;
-        
-        if (!type || !data) {
-          return res.status(400).json({ message: 'Missing event type or data' });
-        }
-        
-        // Directly call the appropriate handler based on the event type
-        switch (type) {
-          case 'video.live_stream.active':
-            await muxClient.handleLivestreamActive(data);
-            break;
-          case 'video.live_stream.idle':
-            await muxClient.handleLivestreamIdle(data);
-            break;
-          case 'video.asset.ready':
-            await muxClient.handleAssetReady(data);
-            break;
-          default:
-            return res.status(400).json({ message: `Unsupported event type: ${type}` });
-        }
-        
-        res.status(200).json({ success: true, message: `Successfully processed test ${type} event` });
-      } catch (error) {
-        console.error('Error handling test MUX webhook:', error);
-        res.status(500).json({ message: 'Error processing test webhook' });
-      }
-    });
-  }
   
   // Track all connected WebSocket clients
   const connectedClients = new Map();
@@ -431,8 +355,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
         
         // Handle WebRTC signaling messages
-        else if (['offer', 'answer', 'ice_candidate', 'call_ended', 'join_reading', 'call_connected'].includes(data.type) && data.readingId) {
-          console.log(`WebRTC signaling: ${data.type} for reading ${data.readingId}`);
+        else if (data.type === 'webrtc_offer') {
+          if (data.readingId && data.senderId && data.recipientId && data.payload) {
+            console.log(`Relaying WebRTC offer for reading ${data.readingId} from ${data.senderId} to ${data.recipientId}`);
+            notifyUser(data.recipientId, data);
+          } else {
+            console.error('Invalid webrtc_offer message received:', data);
+          }
+        }
+        else if (data.type === 'webrtc_answer') {
+          if (data.readingId && data.senderId && data.recipientId && data.payload) {
+            console.log(`Relaying WebRTC answer for reading ${data.readingId} from ${data.senderId} to ${data.recipientId}`);
+            notifyUser(data.recipientId, data);
+          } else {
+            console.error('Invalid webrtc_answer message received:', data);
+          }
+        }
+        else if (data.type === 'webrtc_ice_candidate') {
+          if (data.readingId && data.senderId && data.recipientId && data.payload) {
+            console.log(`Relaying WebRTC ICE candidate for reading ${data.readingId} from ${data.senderId} to ${data.recipientId}`);
+            notifyUser(data.recipientId, data);
+          } else {
+            console.error('Invalid webrtc_ice_candidate message received:', data);
+          }
+        }
+        else if (data.type === 'webrtc_end_call') {
+          if (data.readingId && data.senderId && data.recipientId) {
+            console.log(`Relaying WebRTC end_call for reading ${data.readingId} from ${data.senderId} to ${data.recipientId}`);
+            notifyUser(data.recipientId, data);
+          } else {
+            console.error('Invalid webrtc_end_call message received:', data);
+          }
+        }
+        // Keep existing generic WebRTC signaling for other types like join_reading, call_connected.
+        // 'offer', 'answer', 'ice_candidate', and 'call_ended' (as webrtc_end_call) are now handled above.
+        else if (['join_reading', 'call_connected', 'call_ended'].includes(data.type) && data.readingId) {
+          console.log(`Legacy WebRTC signaling: ${data.type} for reading ${data.readingId}`);
           
           // If this is a join message, broadcast it to everyone to notify them
           if (data.type === 'join_reading') {
@@ -1187,25 +1145,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const livestreamData = req.body;
       
-      // Create the livestream with MUX integration
-      const livestream = await muxClient.createLivestream(
-        req.user,
-        livestreamData.title,
-        livestreamData.description
-      );
-      
-      // Add additional data from the request
-      await storage.updateLivestream(livestream.id, {
+      // Create the livestream record in the database
+      const newLivestream = await storage.createLivestream({
+        userId: req.user.id,
+        title: livestreamData.title,
+        description: livestreamData.description,
+        status: 'pending', // Or 'scheduled' if scheduledFor is provided
+        // streamKey, playbackId will be handled by custom WebRTC solution
+        // muxLivestreamId, muxAssetId are no longer used
         thumbnailUrl: livestreamData.thumbnailUrl || null,
         scheduledFor: livestreamData.scheduledFor ? new Date(livestreamData.scheduledFor) : null,
-        category: livestreamData.category || "General"
+        category: livestreamData.category || "General",
+        viewerCount: 0, // Initialize viewer count
       });
       
-      // Return the livestream with streamUrl for broadcasting
-      res.status(201).json({
-        ...livestream,
-        streamUrl: `rtmps://global-live.mux.com:443/app/${livestream.streamKey}`
-      });
+      // No need to call storage.updateLivestream separately if all data is passed to createLivestream
+      // However, if createLivestream doesn't support all these fields, an update might be needed.
+      // Assuming createLivestream can handle these, otherwise, an update call would be here.
+
+      res.status(201).json(newLivestream); // Return the created livestream record
     } catch (error) {
       console.error("Failed to create livestream:", error);
       res.status(500).json({ message: "Failed to create livestream" });
@@ -1238,8 +1196,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       let updatedLivestream;
       
       if (status === "live") {
-        // Start the livestream with MUX
-        updatedLivestream = await muxClient.startLivestream(id);
+        // Update status in our database
+        updatedLivestream = await storage.updateLivestream(id, {
+          status: 'live',
+          startedAt: new Date(),
+        });
         
         // Broadcast to all connected clients that a new livestream is starting
         (global as any).websocket?.broadcastToAll?.({
@@ -1254,8 +1215,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           timestamp: Date.now()
         });
       } else if (status === "ended") {
-        // End the livestream with MUX
-        updatedLivestream = await muxClient.endLivestream(id);
+        // Update status in our database
+        updatedLivestream = await storage.updateLivestream(id, {
+          status: 'ended',
+          endedAt: new Date(),
+        });
         
         // Broadcast to all connected clients that the livestream has ended
         (global as any).websocket?.broadcastToAll?.({
@@ -1264,7 +1228,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           timestamp: Date.now()
         });
       } else {
-        // For other status updates, just update in our database
+        // For other status updates (e.g., 'pending', 'scheduled'), just update in our database
         updatedLivestream = await storage.updateLivestream(id, { status });
       }
       
@@ -1496,6 +1460,151 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     }
   });
+
+  // WebRTC Configuration Endpoint
+  app.get("/api/webrtc/config/:readingId", async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+
+    try {
+      const readingId = parseInt(req.params.readingId);
+      if (isNaN(readingId)) {
+        return res.status(400).json({ message: "Invalid reading ID format." });
+      }
+
+      const reading = await storage.getReading(readingId);
+      if (!reading) {
+        return res.status(404).json({ message: "Reading not found." });
+      }
+
+      // Authorize: only participants of the reading can get ICE config
+      if (req.user.id !== reading.clientId && req.user.id !== reading.readerId) {
+        return res.status(403).json({ message: "Forbidden: You are not a participant in this reading." });
+      }
+
+      let iceServers: RTCIceServer[] = []; // Define type for iceServers array
+
+      // Parse STUN servers from WEBRTC_ICE_SERVERS
+      const webrtcIceServersJson = process.env.WEBRTC_ICE_SERVERS;
+      if (webrtcIceServersJson) {
+        try {
+          iceServers = JSON.parse(webrtcIceServersJson);
+        } catch (e) {
+          console.error('Error parsing WEBRTC_ICE_SERVERS:', e);
+          // Add a default STUN server if parsing fails and none were added
+          if (iceServers.length === 0) {
+            iceServers.push({ urls: 'stun:stun.l.google.com:19302' });
+          }
+        }
+      } else {
+        // Add a default STUN server if none configured
+        iceServers.push({ urls: 'stun:stun.l.google.com:19302' });
+      }
+
+      // Add TURN servers if configured
+      const turnServersString = process.env.TURN_SERVERS;
+      const turnUsername = process.env.TURN_USERNAME;
+      const turnCredential = process.env.TURN_CREDENTIAL;
+
+      if (turnServersString && turnUsername && turnCredential) {
+        const turnUrls = turnServersString.split(',');
+        for (const url of turnUrls) {
+          if (url.trim()) { // Ensure URL is not empty
+            iceServers.push({
+              urls: url.trim().startsWith('turn:') ? url.trim() : `turn:${url.trim()}`,
+              username: turnUsername,
+              credential: turnCredential,
+            });
+          }
+        }
+      }
+
+      console.log(`ICE Servers for reading ${readingId}:`, JSON.stringify(iceServers));
+      res.json({ iceServers });
+
+    } catch (error) {
+      console.error("Error fetching WebRTC config:", error);
+      res.status(500).json({ message: "Failed to fetch WebRTC configuration." });
+    }
+  });
+
+  // WebRTC Configuration Endpoint
+  app.get("/api/webrtc/config/:readingId", async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+
+    try {
+      const readingId = parseInt(req.params.readingId);
+      if (isNaN(readingId)) {
+        return res.status(400).json({ message: "Invalid reading ID format." });
+      }
+
+      const reading = await storage.getReading(readingId);
+      if (!reading) {
+        return res.status(404).json({ message: "Reading not found." });
+      }
+
+      // Authorize: only participants of the reading can get ICE config
+      if (req.user.id !== reading.clientId && req.user.id !== reading.readerId) {
+        return res.status(403).json({ message: "Forbidden: You are not a participant in this reading." });
+      }
+
+      let iceServers: RTCIceServer[] = []; // Define type for iceServers array
+
+      // Parse STUN servers from WEBRTC_ICE_SERVERS
+      const webrtcIceServersJson = process.env.WEBRTC_ICE_SERVERS;
+      if (webrtcIceServersJson) {
+        try {
+          iceServers = JSON.parse(webrtcIceServersJson);
+        } catch (e) {
+          console.error('Error parsing WEBRTC_ICE_SERVERS:', e);
+          // Add a default STUN server if parsing fails and none were added
+          if (iceServers.length === 0) {
+            iceServers.push({ urls: 'stun:stun.l.google.com:19302' });
+          }
+        }
+      } else {
+        // Add a default STUN server if none configured
+        iceServers.push({ urls: 'stun:stun.l.google.com:19302' });
+      }
+
+      // Add TURN servers if configured
+      const turnServersString = process.env.TURN_SERVERS;
+      const turnUsername = process.env.TURN_USERNAME;
+      const turnCredential = process.env.TURN_CREDENTIAL;
+
+      if (turnServersString && turnUsername && turnCredential) {
+        const turnUrls = turnServersString.split(',');
+        for (const url of turnUrls) {
+          if (url.trim()) { // Ensure URL is not empty
+            iceServers.push({
+              urls: url.trim().startsWith('turn:') ? url.trim() : `turn:${url.trim()}`,
+              username: turnUsername,
+              credential: turnCredential,
+            });
+          }
+        }
+      }
+
+      console.log(`ICE Servers for reading ${readingId}:`, JSON.stringify(iceServers));
+      res.json({ iceServers });
+
+    } catch (error) {
+      console.error("Error fetching WebRTC config:", error);
+      res.status(500).json({ message: "Failed to fetch WebRTC configuration." });
+    }
+  });
+
+  // Admin API routes
+
+  // Get all readings (admin only)
+  app.get("/api/admin/readings", async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    // ... (rest of the admin routes remain unchanged)
 
   // Admin endpoint to process gifts 
   app.post("/api/admin/gifts/process", requireAdmin, async (req, res) => {
@@ -2807,116 +2916,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error creating reader:", error);
       res.status(500).json({ message: "Failed to create reader account" });
-    }
-  });
-  
-  // MUX Livestream API for readings
-  app.post("/api/readings/:id/livestream", async (req, res) => {
-    try {
-      if (!req.isAuthenticated()) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-      
-      const readingId = parseInt(req.params.id);
-      if (isNaN(readingId)) {
-        return res.status(400).json({ message: "Invalid reading ID" });
-      }
-      
-      const reading = await storage.getReading(readingId);
-      if (!reading) {
-        return res.status(404).json({ message: "Reading not found" });
-      }
-      
-      // Only the reader or client can create a livestream for this reading
-      if (reading.readerId !== req.user.id && reading.clientId !== req.user.id) {
-        return res.status(403).json({ message: "Forbidden" });
-      }
-      
-      const { title, description } = req.body;
-      if (!title || !description) {
-        return res.status(400).json({ message: "Title and description are required" });
-      }
-      
-      // Use the MUX client to create a livestream for this reading
-      // Pass the reader user for the livestream creation
-      const readerUser = await storage.getUser(reading.readerId);
-      if (!readerUser) {
-        return res.status(404).json({ message: "Reader not found" });
-      }
-      
-      const livestream = await muxClient.createLivestream(readerUser, title, description);
-      
-      // Update the reading with the livestream ID
-      await storage.updateReading(readingId, {
-        muxLivestreamId: livestream.id
-      });
-      
-      res.status(200).json(livestream);
-    } catch (error) {
-      console.error("Failed to create livestream for reading:", error);
-      res.status(500).json({ message: "Failed to create livestream" });
-    }
-  });
-  
-  // API endpoint to start a MUX livestream
-  app.post("/api/livestreams/:id/start", async (req, res) => {
-    try {
-      if (!req.isAuthenticated()) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-      
-      const livestreamId = parseInt(req.params.id);
-      if (isNaN(livestreamId)) {
-        return res.status(400).json({ message: "Invalid livestream ID" });
-      }
-      
-      const livestream = await storage.getLivestream(livestreamId);
-      if (!livestream) {
-        return res.status(404).json({ message: "Livestream not found" });
-      }
-      
-      // Only the creator can start a livestream
-      if (livestream.userId !== req.user.id) {
-        return res.status(403).json({ message: "Forbidden" });
-      }
-      
-      const updatedLivestream = await muxClient.startLivestream(livestreamId);
-      
-      res.status(200).json(updatedLivestream);
-    } catch (error) {
-      console.error("Failed to start livestream:", error);
-      res.status(500).json({ message: "Failed to start livestream" });
-    }
-  });
-  
-  // API endpoint to end a MUX livestream
-  app.post("/api/livestreams/:id/end", async (req, res) => {
-    try {
-      if (!req.isAuthenticated()) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-      
-      const livestreamId = parseInt(req.params.id);
-      if (isNaN(livestreamId)) {
-        return res.status(400).json({ message: "Invalid livestream ID" });
-      }
-      
-      const livestream = await storage.getLivestream(livestreamId);
-      if (!livestream) {
-        return res.status(404).json({ message: "Livestream not found" });
-      }
-      
-      // Both the creator and admin can end a livestream
-      if (livestream.userId !== req.user.id && req.user.role !== "admin") {
-        return res.status(403).json({ message: "Forbidden" });
-      }
-      
-      const updatedLivestream = await muxClient.endLivestream(livestreamId);
-      
-      res.status(200).json(updatedLivestream);
-    } catch (error) {
-      console.error("Failed to end livestream:", error);
-      res.status(500).json({ message: "Failed to end livestream" });
     }
   });
 

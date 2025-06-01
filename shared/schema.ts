@@ -110,11 +110,7 @@ export const livestreams = pgTable("livestreams", {
   category: text("category").notNull(),
   viewerCount: integer("viewer_count").default(0),
   createdAt: timestamp("created_at").defaultNow(),
-  // MUX specific fields
-  streamKey: text("stream_key"),
-  playbackId: text("playback_id"),
-  muxLivestreamId: text("mux_livestream_id"),
-  muxAssetId: text("mux_asset_id"),
+  // Mux specific fields removed
   duration: real("duration"), // Duration in seconds after stream ends
 });
 
@@ -204,8 +200,8 @@ export const insertLivestreamSchema = createInsertSchema(livestreams)
     startedAt: true, 
     endedAt: true, 
     viewerCount: true,
-    duration: true,
-    muxAssetId: true
+    duration: true
+    // muxAssetId removed as the field is deleted
   });
 
 export const insertForumPostSchema = createInsertSchema(forumPosts)
