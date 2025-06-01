@@ -1,7 +1,7 @@
 import Mux from '@mux/mux-node';
-import { storage } from '../storage';
+import { storage } from '../storage.js';
 import { Livestream, type User } from '@shared/schema';
-import { log } from '../vite';
+import { log } from '../vite.js';
 
 // Lazy initialization for MUX
 let muxInstance: any = null;

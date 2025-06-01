@@ -1,6 +1,5 @@
-
 import { neon, neonConfig } from '@neondatabase/serverless';
-import { log } from './vite';
+import { log } from './vite.js';
 
 // Configure neon
 neonConfig.fetchConnectionCache = true;

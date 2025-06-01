@@ -1,13 +1,14 @@
 import express, { type Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
-import { storage } from "./storage";
+import { storage } from "./storage.js";
 import { setupAuth } from "./auth";
 import { z } from "zod";
 import { UserUpdate, Reading } from "@shared/schema";
 import { db } from "./db";
 import { desc, asc } from "drizzle-orm";
 import { gifts } from "@shared/schema";
+import stripe from "./services/stripe-client.js"; // Corrected import for stripe instance
 import stripeClient from "./services/stripe-client";
 // TRTC has been completely removed
 import * as muxClient from "./services/mux-client";
@@ -117,6 +118,70 @@ export async function registerRoutes(app: Express): Promise<Server> {
   
   // Create HTTP server
   const httpServer = createServer(app);
+
+  // Stripe Webhook endpoint for account funding
+  app.post('/api/webhooks/stripe', express.raw({type: 'application/json'}), async (req, res) => {
+    const sig = req.headers['stripe-signature'] as string;
+    const endpointSecret = process.env.STRIPE_WEBHOOK_SIGNING_SECRET;
+
+    if (!endpointSecret) {
+      console.error("Stripe webhook signing secret is not set.");
+      return res.status(400).send('Webhook Error: Signing secret not configured.');
+    }
+
+    let event;
+
+    try {
+      event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
+    } catch (err: any) {
+      console.error(`⚠️  Webhook signature verification failed.`, err.message);
+      return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+
+    // Handle the event
+    if (event.type === 'payment_intent.succeeded') {
+      const paymentIntent = event.data.object as any; // Cast to any to access properties like amount_received
+      console.log(`🔔 PaymentIntent succeeded: ${paymentIntent.id}`);
+
+      if (paymentIntent.metadata.purpose === 'account_funding') {
+        const userIdString = paymentIntent.metadata.userId;
+        const amountReceived = paymentIntent.amount_received;
+
+        if (!userIdString || !amountReceived) {
+          console.error('Webhook Error: Missing userId or amountReceived in paymentIntent metadata for account_funding.');
+          return res.status(400).send('Webhook Error: Missing metadata.');
+        }
+
+        const userId = parseInt(userIdString);
+        if (isNaN(userId)) {
+          console.error(`Webhook Error: Invalid userId format: ${userIdString}`);
+          return res.status(400).send('Webhook Error: Invalid userId.');
+        }
+
+        try {
+          const user = await storage.getUser(userId);
+          if (user) {
+            const newBalance = (user.accountBalance || 0) + amountReceived;
+            await storage.updateUser(user.id, { accountBalance: newBalance });
+            console.log(`💰 Account for user ${user.id} funded with ${amountReceived/100}. New balance: ${newBalance/100}`);
+          } else {
+            console.error(`Webhook Error: User not found for ID: ${userId}`);
+            // Still send 200 to Stripe as the event was processed, even if user was not found
+          }
+        } catch (storageError) {
+          console.error(`Webhook Error: Error updating user balance for user ${userId}:`, storageError);
+          // Still send 200 to Stripe
+        }
+      } else {
+        console.log(`Received payment_intent.succeeded for other purpose: ${paymentIntent.metadata.purpose || 'N/A'}`);
+      }
+    } else {
+      console.log(`Received unhandled event type ${event.type}`);
+    }
+
+    // Return a 200 response to acknowledge receipt of the event
+    res.json({received: true});
+  });
   
   // Setup WebSocket server for live readings and real-time communication
   const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
@@ -2710,10 +2775,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Create the reader account
       const newReader = await storage.createUser({
-        username: fullName, // Use fullName as username
+        username: username, // Corrected: use username from req.body
         password: hashedPassword,
         email,
-        fullName: username, // Use username field as fullName
+        fullName: fullName, // Corrected: use fullName from req.body
         role: 'reader',
         bio: bio || '',
         profileImage: profileImageUrl,
