@@ -33,22 +33,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CelestialButton } from "@/components/ui/celestial-button";
 import { Slider } from "@/components/ui/slider";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import MuxPlayer from "@mux/mux-player-react";
-
-// Error boundary specific for MuxPlayer to catch and handle player errors
-class MuxPlayerErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean }> {
-  constructor(props: { children: React.ReactNode }) {
-    super(props);
-    this.state = { hasError: false };
-  }
-
-  static getDerivedStateFromError() {
-    return { hasError: true };
-  }
-
-  componentDidCatch(error: any, errorInfo: React.ErrorInfo) {
-    console.error('MuxPlayer error:', error, errorInfo);
-  }
 
   render() {
     if (this.state.hasError) {
