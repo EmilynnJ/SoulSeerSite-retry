@@ -1,11 +1,13 @@
-import { drizzle } from 'drizzle-orm/node-postgres';
-import pg from 'pg';
+import { drizzle } from 'drizzle-orm/neon-serverless';
+import { neon } from '@neondatabase/serverless';
 import * as schema from '@shared/schema';
 
-const { Pool } = pg;
+if (!process.env.DATABASE_URL) {
+  throw new Error('DATABASE_URL is required');
+}
 
-// Create a PostgreSQL pool using the DATABASE_URL environment variable
-export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+// Create Neon connection
+const sql = neon(process.env.DATABASE_URL);
 
-// Initialize Drizzle with the pool and schema
-export const db = drizzle(pool, { schema });
+// Initialize Drizzle with the neon connection and schema
+export const db = drizzle(sql, { schema });

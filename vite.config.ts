@@ -32,7 +32,14 @@ export default defineConfig({
   build: {
     outDir: path.resolve(__dirname, "dist/public"),
     emptyOutDir: true,
-    sourcemap: true,
-    emptyOutDir: true,
+    sourcemap: process.env.NODE_ENV !== "production",
+    minify: process.env.NODE_ENV === "production",
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          vendor: ['react', 'react-dom'],
+        },
+      },
+    },
   },
 });

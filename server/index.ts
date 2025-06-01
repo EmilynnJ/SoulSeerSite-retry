@@ -82,11 +82,16 @@ app.use((req, res, next) => {
 (async () => {
   try {
     // Initialize database before registering routes
-    await initializeDatabase();
+    const { runMigrations } = await import('./run-migrations.js');
+    await runMigrations();
     log('Database initialized successfully', 'database');
   } catch (error) {
     log(`Failed to initialize database: ${error}`, 'database');
-    // Continue with server startup even if database initialization fails
+    // In production, fail fast if database initialization fails
+    if (process.env.NODE_ENV === 'production') {
+      process.exit(1);
+    }
+    // In development, continue with server startup
   }
   
   const server = await registerRoutes(app);
