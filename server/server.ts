@@ -1,9 +1,10 @@
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes.js";
 import { setupVite, serveStatic, log } from "./vite.js";
-import { initializeDatabase } from "./migrations/migration-manager.js";
+import { runMigrations } from "./run-migrations.js";
 import { config } from "dotenv";
 import path from "path";
+import fs from "fs";
 
 // Load environment variables
 config();
@@ -37,7 +38,7 @@ app.use('/assets', express.static(staticPaths.assets, {
   maxAge: '7d', // Cache for 7 days
 }));
 
-console.log(`Serving uploads from: ${uploadsPath} with fallback to default images`);
+console.log(`Serving static files from: ${JSON.stringify(staticPaths, null, 2)}`);
 
 // Add health check endpoint for Render
 app.get('/api/health', (req: Request, res: Response) => {
@@ -82,16 +83,13 @@ app.use((req, res, next) => {
 (async () => {
   try {
     // Initialize database before registering routes
-    const { runMigrations } = await import('./run-migrations.js');
     await runMigrations();
     log('Database initialized successfully', 'database');
   } catch (error) {
     log(`Failed to initialize database: ${error}`, 'database');
-    // In production, fail fast if database initialization fails
-    if (process.env.NODE_ENV === 'production') {
-      process.exit(1);
-    }
-    // In development, continue with server startup
+    // Always fail on database initialization error
+    log('Exiting due to database initialization failure', 'database');
+    process.exit(1);
   }
   
   const server = await registerRoutes(app);

@@ -28,12 +28,13 @@ ESBUILD_COMMON_OPTS="--platform=node --packages=external --format=esm --sourcema
 # Build server files
 echo "Building server files..."
 npx esbuild \
-  server/index.ts \
-  server/run-migrations.ts \
-  server/utils.ts \
-  server/db.ts \
+  server/*.ts \
   $ESBUILD_COMMON_OPTS \
-  --outdir=dist
+  --outdir=dist/server
+
+# Create main server entry point
+echo "Creating server entry point..."
+echo "import './server/server.js';" > dist/index.js
 
 # Copy required files
 echo "Copying static files..."

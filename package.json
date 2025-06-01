@@ -5,8 +5,8 @@
   "license": "MIT",
   "scripts": {
     "dev": "tsx server/server.ts",
-    "start": "NODE_ENV=production node dist/server.js",
-    "build": "./build.sh",
+    "start": "NODE_ENV=production node dist/index.js",
+    "build": "chmod +x build.sh && ./build.sh",
     "check": "tsc",
     "db:push": "drizzle-kit push"
   },
