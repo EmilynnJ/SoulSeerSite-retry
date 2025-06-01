@@ -1,4 +1,4 @@
-import { db } from "../db";
+import { db } from "../db.js";
 import * as fs from "fs";
 import * as path from "path";
 import pg from "pg";

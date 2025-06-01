@@ -2,7 +2,7 @@ import express, { type Express, Request, Response, NextFunction } from "express"
 import { createServer, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage.js";
-import { setupAuth } from "./auth";
+import { setupAuth } from "./auth.js";
 import { z } from "zod";
 import { UserUpdate, Reading } from "@shared/schema";
 import { db } from "./db";
@@ -48,6 +48,18 @@ const __dirname = dirname(__filename);
 
 // Use consistent path for uploads in all environments
 const uploadsPath = path.join(process.cwd(), 'public', 'uploads');
+
+interface ActiveBillingSession {
+  readingId: string;
+  clientId: number;
+  readerId: number;
+  pricePerMinute: number; // in cents
+  timerId: NodeJS.Timeout | null;
+  billedMinutes: number;
+  participantsConnected: Set<number>;
+}
+const activeBillingSessions = new Map<string, ActiveBillingSession>();
+const BILLING_INTERVAL_MS = 60000; // 1 minute
 
 // Password hashing function
 const scryptAsync = promisify(scrypt);
@@ -380,11 +392,165 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
         else if (data.type === 'webrtc_end_call') {
           if (data.readingId && data.senderId && data.recipientId) {
-            console.log(`Relaying WebRTC end_call for reading ${data.readingId} from ${data.senderId} to ${data.recipientId}`);
-            notifyUser(data.recipientId, data);
+            console.log(`Processing WebRTC end_call for reading ${data.readingId} from ${data.senderId} to ${data.recipientId}`);
+            notifyUser(data.recipientId, data); // Notify the other user
+
+            const readingIdToEnd = data.readingId.toString();
+            const sessionToEnd = activeBillingSessions.get(readingIdToEnd);
+            if (sessionToEnd) { // Check if session exists
+              if (sessionToEnd.timerId) {
+                clearInterval(sessionToEnd.timerId);
+                console.log(`Billing timer stopped for reading ${readingIdToEnd} due to end_call.`);
+              }
+
+              const finalTotalPrice = sessionToEnd.billedMinutes * sessionToEnd.pricePerMinute;
+              storage.updateReading(parseInt(readingIdToEnd), {
+                status: 'completed',
+                endedAt: new Date(),
+                totalPrice: finalTotalPrice,
+                duration: sessionToEnd.billedMinutes
+              }).then(() => {
+                console.log(`Reading ${readingIdToEnd} finalized due to end_call. Total price: ${finalTotalPrice/100}, Billed minutes: ${sessionToEnd.billedMinutes}`);
+              }).catch(err => {
+                console.error(`Error finalizing reading ${readingIdToEnd} after end_call:`, err);
+              });
+              activeBillingSessions.delete(readingIdToEnd); // Delete after processing
+            } else {
+              console.warn(`Received webrtc_end_call for session ${readingIdToEnd} not found in activeBillingSessions. Attempting to update status.`);
+              // Attempt to update DB status anyway if it was missed, assuming 0 billed if session is gone.
+              storage.updateReading(parseInt(readingIdToEnd), { status: 'completed', endedAt: new Date(), totalPrice: 0, duration: 0 });
+            }
           } else {
             console.error('Invalid webrtc_end_call message received:', data);
           }
+        }
+        else if (data.type === 'WEBRTC_CALL_CONNECTED') {
+          const { readingId: msgReadingId, userId: msgUserId } = data;
+          const currentReadingIdStr = msgReadingId?.toString();
+          const currentUserId = msgUserId ? parseInt(msgUserId.toString()) : null;
+
+          if (!currentReadingIdStr || currentUserId === null || isNaN(currentUserId)) {
+            console.error('WEBRTC_CALL_CONNECTED: Invalid readingId or userId.', data);
+            return;
+          }
+          console.log(`WEBRTC_CALL_CONNECTED received for reading ${currentReadingIdStr} from user ${currentUserId}`);
+
+          storage.getReading(parseInt(currentReadingIdStr)).then(reading => {
+            if (!reading) {
+              console.error(`WEBRTC_CALL_CONNECTED: Reading ${currentReadingIdStr} not found.`);
+              return;
+            }
+            // Basic status check - could be more specific e.g. 'accepted_by_reader'
+            if (!['in_progress', 'scheduled', 'payment_completed', 'waiting_payment'].includes(reading.status)) {
+                console.error(`WEBRTC_CALL_CONNECTED: Reading ${currentReadingIdStr} has invalid status ${reading.status} for call connection.`);
+                return;
+            }
+
+            let session = activeBillingSessions.get(currentReadingIdStr);
+            if (!session) {
+              session = {
+                readingId: currentReadingIdStr,
+                clientId: reading.clientId,
+                readerId: reading.readerId,
+                pricePerMinute: reading.pricePerMinute,
+                timerId: null,
+                billedMinutes: 0,
+                participantsConnected: new Set([currentUserId])
+              };
+              activeBillingSessions.set(currentReadingIdStr, session);
+              console.log(`User ${currentUserId} connected for reading ${currentReadingIdStr}. Waiting for other participant. Participants: ${JSON.stringify(Array.from(session.participantsConnected))}`);
+            } else {
+              session.participantsConnected.add(currentUserId);
+              console.log(`User ${currentUserId} connected for reading ${currentReadingIdStr}. Participants connected: ${session.participantsConnected.size}. Participants: ${JSON.stringify(Array.from(session.participantsConnected))}`);
+            }
+
+            // Check if both client and reader are now connected
+            if (session.participantsConnected.has(session.clientId) &&
+                session.participantsConnected.has(session.readerId) &&
+                !session.timerId) {
+              console.log(`Both participants (Client: ${session.clientId}, Reader: ${session.readerId}) connected for reading ${currentReadingIdStr}. Starting billing timer.`);
+
+              storage.updateReading(parseInt(currentReadingIdStr), { status: 'in_progress', startedAt: new Date() })
+                .then(() => console.log(`Reading ${currentReadingIdStr} status updated to in_progress.`))
+                .catch(err => console.error(`Error updating reading ${currentReadingIdStr} status:`, err));
+
+              const outerSessionReadingId = session.readingId; // Capture readingId for use in interval
+
+              session.timerId = setInterval(async () => { // Make it async
+                const currentSessionState = activeBillingSessions.get(outerSessionReadingId);
+
+                if (!currentSessionState || !currentSessionState.timerId) {
+                  console.warn(`Billing interval for ${outerSessionReadingId} running for a session that has ended or its timer was cleared. No action taken.`);
+                  // This specific interval instance will simply stop executing further logic.
+                  // The main timer on the session object (currentSessionState.timerId) is the source of truth for clearing.
+                  return;
+                }
+
+                try {
+                  const client = await storage.getUser(currentSessionState.clientId);
+                  const reader = await storage.getUser(currentSessionState.readerId);
+
+                  if (!client || !reader) {
+                    console.error(`Billing Error: Client (ID: ${currentSessionState.clientId}) or Reader (ID: ${currentSessionState.readerId}) not found for session ${outerSessionReadingId}. Stopping billing.`);
+                    if (currentSessionState.timerId) clearInterval(currentSessionState.timerId);
+                    activeBillingSessions.delete(outerSessionReadingId);
+                    notifyUser(currentSessionState.clientId, { type: 'WEBRTC_END_CALL_ERROR', readingId: outerSessionReadingId, reason: 'Billing data error (user lookup).' });
+                    notifyUser(currentSessionState.readerId, { type: 'WEBRTC_END_CALL_ERROR', readingId: outerSessionReadingId, reason: 'Billing data error (user lookup).' });
+                    await storage.updateReading(parseInt(outerSessionReadingId), { status: 'completed_error', endedAt: new Date(), duration: currentSessionState.billedMinutes, totalPrice: currentSessionState.billedMinutes * currentSessionState.pricePerMinute });
+                    return;
+                  }
+
+                  if ((client.accountBalance || 0) >= currentSessionState.pricePerMinute) {
+                    const newClientBalance = (client.accountBalance || 0) - currentSessionState.pricePerMinute;
+                    const readerShare = Math.floor(currentSessionState.pricePerMinute * 0.70); // 70%
+                    const newReaderBalance = (reader.accountBalance || 0) + readerShare;
+
+                    await storage.updateUser(client.id, { accountBalance: newClientBalance });
+                    await storage.updateUser(reader.id, { accountBalance: newReaderBalance });
+
+                    currentSessionState.billedMinutes += 1;
+                    activeBillingSessions.set(outerSessionReadingId, currentSessionState); // Update the map with new billedMinutes
+
+                    await storage.updateReading(parseInt(outerSessionReadingId), { duration: currentSessionState.billedMinutes });
+
+                    console.log(`Billed reading ${outerSessionReadingId}: Minute ${currentSessionState.billedMinutes}. Client ${client.id} new balance: ${newClientBalance/100}. Reader ${reader.id} new balance: ${newReaderBalance/100}.`);
+
+                    notifyUser(client.id, { type: 'ACCOUNT_BALANCE_UPDATED', newBalance: newClientBalance, readingId: outerSessionReadingId });
+
+                  } else {
+                    console.log(`Insufficient balance for client ${client.id} in reading ${outerSessionReadingId}. Stopping billing and call.`);
+                    if (currentSessionState.timerId) clearInterval(currentSessionState.timerId);
+
+                    notifyUser(currentSessionState.clientId, { type: 'WEBRTC_END_CALL_LOW_BALANCE', readingId: outerSessionReadingId });
+                    notifyUser(currentSessionState.readerId, { type: 'WEBRTC_END_CALL_LOW_BALANCE', readingId: outerSessionReadingId });
+
+                    const finalTotalPrice = currentSessionState.billedMinutes * currentSessionState.pricePerMinute;
+                    await storage.updateReading(parseInt(outerSessionReadingId), {
+                      status: 'completed_low_balance',
+                      endedAt: new Date(),
+                      totalPrice: finalTotalPrice,
+                      duration: currentSessionState.billedMinutes
+                    });
+                    activeBillingSessions.delete(outerSessionReadingId);
+                  }
+                } catch (err) {
+                  console.error(`Critical error during billing for session ${outerSessionReadingId}:`, err);
+                  if (currentSessionState && currentSessionState.timerId) clearInterval(currentSessionState.timerId);
+                  activeBillingSessions.delete(outerSessionReadingId);
+                  // Notify users if possible, but currentSessionState might be partly invalid if error was early
+                  const clientIdToNotify = currentSessionState ? currentSessionState.clientId : parseInt(outerSessionReadingId.split('_')[0]); // Heuristic
+                  const readerIdToNotify = currentSessionState ? currentSessionState.readerId : parseInt(outerSessionReadingId.split('_')[1]); // Heuristic
+                  notifyUser(clientIdToNotify, { type: 'WEBRTC_END_CALL_ERROR', readingId: outerSessionReadingId, reason: 'Internal billing error.' });
+                  notifyUser(readerIdToNotify, { type: 'WEBRTC_END_CALL_ERROR', readingId: outerSessionReadingId, reason: 'Internal billing error.' });
+                  try {
+                      await storage.updateReading(parseInt(outerSessionReadingId), { status: 'completed_error', endedAt: new Date(), duration: currentSessionState?.billedMinutes || 0, totalPrice: (currentSessionState?.billedMinutes || 0) * (currentSessionState?.pricePerMinute || 0) });
+                  } catch (updateErr) {
+                      console.error(`Failed to update reading status after billing error for ${outerSessionReadingId}:`, updateErr);
+                  }
+                }
+              }, BILLING_INTERVAL_MS);
+            }
+          }).catch(err => console.error(`WEBRTC_CALL_CONNECTED: Error fetching reading ${currentReadingIdStr}`, err));
         }
         // Keep existing generic WebRTC signaling for other types like join_reading, call_connected.
         // 'offer', 'answer', 'ice_candidate', and 'call_ended' (as webrtc_end_call) are now handled above.
@@ -421,14 +587,56 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // If user is a reader, update their status and broadcast offline status
       if (userId !== null) {
-        storage.getUser(userId).then(user => {
+        const disconnectedUserId = userId; // Capture for use in closure
+        storage.getUser(disconnectedUserId).then(user => {
           if (user && user.role === 'reader') {
             const update: UserUpdate = { isOnline: false };
-            storage.updateUser(userId as number, update);
-            broadcastReaderActivity(userId as number, 'offline');
+            storage.updateUser(disconnectedUserId, update);
+            broadcastReaderActivity(disconnectedUserId, 'offline');
           }
         }).catch(err => {
           console.error('Error updating reader status on disconnect:', err);
+        });
+
+        // Check active billing sessions for this user
+        activeBillingSessions.forEach((session, readingId) => {
+          if ((session.clientId === disconnectedUserId || session.readerId === disconnectedUserId) && session.participantsConnected.has(disconnectedUserId)) {
+            session.participantsConnected.delete(disconnectedUserId);
+            console.log(`User ${disconnectedUserId} disconnected from reading ${readingId}. Participants remaining: ${session.participantsConnected.size}`);
+
+            if (session.timerId) { // If timer was running
+              clearInterval(session.timerId);
+              session.timerId = null; // Mark timer as stopped
+              console.log(`Billing timer stopped/paused for reading ${readingId} due to user ${disconnectedUserId} disconnect.`);
+
+              const otherParticipantId = session.clientId === disconnectedUserId ? session.readerId : session.clientId;
+              if (connectedClients.size > 0) { // Check if there's anyone to notify
+                 notifyUser(otherParticipantId, { type: 'PARTICIPANT_DISCONNECTED', readingId, disconnectedUserId });
+              }
+              // TODO: Handle session finalization after grace period or if other user also leaves.
+              // For now, if the other participant doesn't also disconnect or send end_call, the session might hang in activeBillingSessions
+              // We'll refine this: if one disconnects, we should probably end the reading after a short period or if the other leaves.
+            }
+
+            // If both participants are now disconnected, fully clean up and finalize the reading.
+            if (session.participantsConnected.size === 0 && activeBillingSessions.has(readingId)) {
+              console.log(`Both participants disconnected from reading ${readingId}. Finalizing and cleaning up session.`);
+              if(session.timerId) clearInterval(session.timerId);
+
+              const finalTotalPrice = session.billedMinutes * session.pricePerMinute;
+              storage.updateReading(parseInt(readingId), {
+                status: 'completed_disconnect',
+                endedAt: new Date(),
+                totalPrice: finalTotalPrice,
+                duration: session.billedMinutes
+              }).then(() => {
+                 console.log(`Reading ${readingId} finalized due to both disconnect. Total price: ${finalTotalPrice/100}, Billed minutes: ${session.billedMinutes}`);
+              }).catch(err => {
+                console.error(`Error finalizing reading ${readingId} after both disconnect:`, err);
+              });
+              activeBillingSessions.delete(readingId);
+            }
+          }
         });
       }
       
@@ -437,8 +645,46 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
     
     ws.on('error', (error) => {
-      console.error(`WebSocket error for client ${clientId}:`, error);
-      connectedClients.delete(clientId);
+      const erroringClientId = clientId; // Capture for closure
+      const erroringUserId = userId; // Capture for closure
+      console.error(`WebSocket error for client ${erroringClientId} (User ID: ${erroringUserId}):`, error);
+
+      // Perform similar cleanup as on 'close' if a user was associated with this WebSocket
+      if (erroringUserId !== null) {
+          activeBillingSessions.forEach((session, readingId) => {
+            if ((session.clientId === erroringUserId || session.readerId === erroringUserId) && session.participantsConnected.has(erroringUserId)) {
+              session.participantsConnected.delete(erroringUserId);
+              console.log(`User ${erroringUserId} removed from reading ${readingId} due to WebSocket error. Participants remaining: ${session.participantsConnected.size}`);
+              if (session.timerId) {
+                clearInterval(session.timerId);
+                session.timerId = null;
+                console.log(`Billing timer stopped/paused for reading ${readingId} due to WebSocket error for user ${erroringUserId}.`);
+                const otherParticipantId = session.clientId === erroringUserId ? session.readerId : session.clientId;
+                if (connectedClients.size > 0) {
+                    notifyUser(otherParticipantId, { type: 'PARTICIPANT_DISCONNECTED', readingId, disconnectedUserId: erroringUserId, reason: 'websocket_error' });
+                }
+              }
+              if (session.participantsConnected.size === 0 && activeBillingSessions.has(readingId)) {
+                  console.log(`Both participants effectively disconnected from reading ${readingId} after error. Finalizing session.`);
+                  if(session.timerId) clearInterval(session.timerId);
+
+                  const finalTotalPrice = session.billedMinutes * session.pricePerMinute;
+                  storage.updateReading(parseInt(readingId), {
+                    status: 'completed_error',
+                    endedAt: new Date(),
+                    totalPrice: finalTotalPrice,
+                    duration: session.billedMinutes
+                  }).then(() => {
+                    console.log(`Reading ${readingId} finalized due to error disconnect. Total price: ${finalTotalPrice/100}, Billed minutes: ${session.billedMinutes}`);
+                  }).catch(err => {
+                    console.error(`Error finalizing reading ${readingId} after error disconnect:`, err);
+                  });
+                  activeBillingSessions.delete(readingId);
+              }
+            }
+        });
+      }
+      connectedClients.delete(erroringClientId);
     });
   });
   
@@ -469,6 +715,72 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(sanitizedReaders);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch readers" });
+    }
+  });
+
+  // Reader accepts a reading request (for on-demand, to notify client to initiate call)
+  app.post("/api/readings/:readingId/accept", async (req, res) => {
+    if (!req.isAuthenticated() || req.user.role !== 'reader') {
+      return res.status(403).json({ message: "Not authorized or not a reader." });
+    }
+
+    try {
+      const readingId = parseInt(req.params.readingId);
+      if (isNaN(readingId)) {
+        return res.status(400).json({ message: "Invalid reading ID." });
+      }
+
+      const reading = await storage.getReading(readingId);
+      if (!reading) {
+        return res.status(404).json({ message: "Reading not found." });
+      }
+
+      // Authorize: only the assigned reader can accept
+      if (req.user.id !== reading.readerId) {
+        return res.status(403).json({ message: "Forbidden: You are not the reader for this session." });
+      }
+
+      // Validate reading status - e.g., can only accept if it's 'waiting_payment' or 'payment_completed' for on-demand
+      // Or if it's 'scheduled' and the time is near. For this example, let's assume it's an on-demand paid reading.
+      if (reading.readingMode !== 'on_demand' || (reading.status !== 'payment_completed' && reading.status !== 'waiting_payment')) {
+        // Note: 'waiting_payment' might be too early if payment hasn't been confirmed yet by Stripe.
+        // 'payment_completed' is safer if Stripe webhook updates status before this.
+        // For simplicity, let's assume 'payment_completed' is the ideal state to accept.
+        // Or a new status like 'awaiting_acceptance' could be used.
+        // For now, we'll be a bit flexible for testing.
+        console.warn(`Reader accepting reading ${readingId} with status ${reading.status} and mode ${reading.readingMode}`);
+      }
+
+      // Update reading status to indicate reader has accepted and is ready
+      // This status might be 'awaiting_connection' or similar.
+      // For now, we are not changing the status, just notifying.
+      // const updatedReading = await storage.updateReading(readingId, { status: "awaiting_connection" });
+      // if (!updatedReading) {
+      //   return res.status(500).json({ message: "Failed to update reading status."});
+      // }
+
+      const callSetupMessage = {
+        type: 'CALL_SETUP_READY',
+        readingId: reading.id,
+        clientId: reading.clientId,
+        readerId: reading.readerId,
+        offerInitiatorId: reading.clientId // Client will initiate the WebRTC offer
+      };
+
+      // Notify both client and reader that the reader has accepted and they can proceed to connect
+      if ((global as any).websocket?.notifyUser) {
+        (global as any).websocket.notifyUser(reading.clientId, callSetupMessage);
+        (global as any).websocket.notifyUser(reading.readerId, callSetupMessage); // Also notify reader as confirmation
+        console.log(`Sent CALL_SETUP_READY for reading ${reading.id} to client ${reading.clientId} and reader ${reading.readerId}`);
+      } else {
+        console.error("WebSocket service not available on global object for sending CALL_SETUP_READY.");
+      }
+
+      res.status(200).json({ message: "Reading accepted, users notified to set up call."});
+
+    } catch (error) {
+      console.error("Error accepting reading:", error);
+      res.status(500).json({ message: "Failed to accept reading." });
     }
   });
   
@@ -1459,68 +1771,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     }
   });
-
-    try {
-      const readingId = parseInt(req.params.readingId);
-      if (isNaN(readingId)) {
-        return res.status(400).json({ message: "Invalid reading ID format." });
-      }
-
-      const reading = await storage.getReading(readingId);
-      if (!reading) {
-        return res.status(404).json({ message: "Reading not found." });
-      }
-
-      // Authorize: only participants of the reading can get ICE config
-      if (req.user.id !== reading.clientId && req.user.id !== reading.readerId) {
-        return res.status(403).json({ message: "Forbidden: You are not a participant in this reading." });
-      }
-
-      let iceServers: RTCIceServer[] = []; // Define type for iceServers array
-
-      // Parse STUN servers from WEBRTC_ICE_SERVERS
-      const webrtcIceServersJson = process.env.WEBRTC_ICE_SERVERS;
-      if (webrtcIceServersJson) {
-        try {
-          iceServers = JSON.parse(webrtcIceServersJson);
-        } catch (e) {
-          console.error('Error parsing WEBRTC_ICE_SERVERS:', e);
-          // Add a default STUN server if parsing fails and none were added
-          if (iceServers.length === 0) {
-            iceServers.push({ urls: 'stun:stun.l.google.com:19302' });
-          }
-        }
-      } else {
-        // Add a default STUN server if none configured
-        iceServers.push({ urls: 'stun:stun.l.google.com:19302' });
-      }
-
-      // Add TURN servers if configured
-      const turnServersString = process.env.TURN_SERVERS;
-      const turnUsername = process.env.TURN_USERNAME;
-      const turnCredential = process.env.TURN_CREDENTIAL;
-
-      if (turnServersString && turnUsername && turnCredential) {
-        const turnUrls = turnServersString.split(',');
-        for (const url of turnUrls) {
-          if (url.trim()) { // Ensure URL is not empty
-            iceServers.push({
-              urls: url.trim().startsWith('turn:') ? url.trim() : `turn:${url.trim()}`,
-              username: turnUsername,
-              credential: turnCredential,
-            });
-          }
-        }
-      }
-
-      console.log(`ICE Servers for reading ${readingId}:`, JSON.stringify(iceServers));
-      res.json({ iceServers });
-
-    } catch (error) {
-      console.error("Error fetching WebRTC config:", error);
-      res.status(500).json({ message: "Failed to fetch WebRTC configuration." });
-    }
-  };
 
   // WebRTC Configuration Endpoint
   app.get("/api/webrtc/config/:readingId", async (req, res) => {
@@ -2913,4 +3163,4 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   return httpServer;
-});
+}

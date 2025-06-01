@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
-import { runMigration } from './migration-manager';
+import { runMigration } from './migration-manager.js';
 
 // ES Module alternative for __dirname
 const __filename = fileURLToPath(import.meta.url);

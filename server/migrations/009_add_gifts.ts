@@ -1,6 +1,6 @@
-import { db } from '../db';
+import { db } from '../db.js';
 import { sql } from 'drizzle-orm';
-import { query } from '../database';
+import { query } from '../database.js';
 
 export async function up() {
   console.log('Creating gifts table...');
