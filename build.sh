@@ -24,28 +24,27 @@ echo "Building server..."
 
 # Common esbuild options
 ESBUILD_COMMON_OPTS="--platform=node --packages=external --format=esm --sourcemap --minify=false"
-ESBUILD_BANNER="import { createRequire } from 'module';import path from 'path';import { fileURLToPath } from 'url';import { dirname } from 'path';const require = createRequire(import.meta.url);const __filename = fileURLToPath(import.meta.url);const __dirname = dirname(__filename);globalThis.__filename = __filename;globalThis.__dirname = __dirname;"
 
-# Build main server
+# Build server and migrations separately to avoid import conflicts
+echo "Building server..."
 npx esbuild server/index.ts \
   $ESBUILD_COMMON_OPTS \
-  --banner:js="$ESBUILD_BANNER" \
   --outdir=dist
 
-# Build migration script
+echo "Building migrations..."
 npx esbuild server/run-migrations.ts \
   $ESBUILD_COMMON_OPTS \
-  --banner:js="$ESBUILD_BANNER" \
-  --outfile=dist/run-migrations.js
+  --outdir=dist
 
 # Copy required files
 echo "Copying static files..."
 cp -r public/* dist/public/ 2>/dev/null || :
 
-# Copy migrations
+# Copy migrations to both locations (for compatibility)
 echo "Copying database migrations..."
-mkdir -p dist/server/migrations
+mkdir -p dist/server/migrations dist/migrations
 cp -r server/migrations/* dist/server/migrations/ 2>/dev/null || :
+cp -r server/migrations/* dist/migrations/ 2>/dev/null || :
 
 # Ensure all required directories exist
 mkdir -p \

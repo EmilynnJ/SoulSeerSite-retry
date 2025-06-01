@@ -1,12 +1,15 @@
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs';
-import { db } from './db.js';
+import { neon } from '@neondatabase/serverless';
 import { log } from './vite.js';
-import { sql } from '@vercel/postgres';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+if (!process.env.DATABASE_URL) {
+  throw new Error('DATABASE_URL is required');
+}
+
+// Create Neon connection
+const sql = neon(process.env.DATABASE_URL);
 
 // Create migrations table if it doesn't exist
 const createMigrationsTable = async () => {
@@ -15,14 +18,14 @@ const createMigrationsTable = async () => {
       id SERIAL PRIMARY KEY,
       name VARCHAR(255) NOT NULL UNIQUE,
       applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
+    )
   `;
 };
 
 // Get applied migrations
-const getAppliedMigrations = async () => {
-  const result = await sql`SELECT name FROM migrations ORDER BY id ASC;`;
-  return result.rows.map(row => row.name);
+const getAppliedMigrations = async (): Promise<string[]> => {
+  const result = await sql`SELECT name FROM migrations ORDER BY id ASC`;
+  return result.map(row => row.name);
 };
 
 // Run migrations
@@ -35,7 +38,7 @@ const runMigrations = async () => {
     const appliedMigrations = await getAppliedMigrations();
     
     // Get all migration files
-    const migrationsDir = join(dirname(__filename), 'migrations');
+    const migrationsDir = join(process.cwd(), 'server', 'migrations');
     const migrationFiles = fs.readdirSync(migrationsDir)
       .filter(file => file.endsWith('.sql'))
       .sort();
@@ -50,7 +53,7 @@ const runMigrations = async () => {
     
     log(`Found ${pendingMigrations.length} pending migrations`, 'database');
     
-    // Run each pending migration in a transaction
+    // Run each pending migration
     for (const migrationFile of pendingMigrations) {
       const migrationPath = join(migrationsDir, migrationFile);
       const migrationContent = fs.readFileSync(migrationPath, 'utf8');
@@ -66,13 +69,12 @@ const runMigrations = async () => {
           .filter(s => s.length > 0);
         
         for (const statement of statements) {
-          await sql.query(statement + ';');
+          // Use raw SQL with template literal
+          await sql`${statement}`;
         }
         
         // Record the migration
-        await sql`
-          INSERT INTO migrations (name) VALUES (${migrationFile});
-        `;
+        await sql`INSERT INTO migrations (name) VALUES (${migrationFile})`;
         
         // Commit transaction
         await sql`COMMIT`;
@@ -92,7 +94,8 @@ const runMigrations = async () => {
 };
 
 // Run migrations if this file is executed directly
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+const isMainModule = process.argv[1] === fileURLToPath(import.meta.url);
+if (isMainModule) {
   runMigrations()
     .then(() => {
       log('Database migration completed', 'database');
