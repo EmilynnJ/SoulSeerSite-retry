@@ -39,9 +39,8 @@ import { dirname } from 'path';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const uploadsPath = process.env.NODE_ENV === 'production' 
-  ? path.join(dirname(dirname(__filename)), 'public', 'uploads')  // Go up two levels from routes.ts
-  : path.join(process.cwd(), 'public', 'uploads');
+// Use consistent path for uploads in all environments
+const uploadsPath = path.join(process.cwd(), 'public', 'uploads');
 
 // Password hashing function
 const scryptAsync = promisify(scrypt);
