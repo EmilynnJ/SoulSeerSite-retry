@@ -1521,7 +1521,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.error("Error fetching WebRTC config:", error);
       res.status(500).json({ message: "Failed to fetch WebRTC configuration." });
     }
-  });
+  };
 
   // WebRTC Configuration Endpoint
   app.get("/api/webrtc/config/:readingId", async (req, res) => {
