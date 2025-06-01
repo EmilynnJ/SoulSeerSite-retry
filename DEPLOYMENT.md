@@ -10,7 +10,6 @@ This document outlines the steps to deploy the SoulSeer application to Railway, 
 2. [Railway CLI](https://docs.railway.app/develop/cli) installed (optional but recommended)
 3. A PostgreSQL database
 4. Stripe API keys (for payment processing)
-5. MUX API keys (for video streaming)
 
 ### Environment Variables
 
@@ -20,9 +19,6 @@ The following environment variables need to be set in your Railway project:
 DATABASE_URL=your_postgres_database_url
 STRIPE_SECRET_KEY=your_stripe_secret_key
 STRIPE_WEBHOOK_SECRET=your_stripe_webhook_secret
-MUX_TOKEN_ID=your_mux_token_id
-MUX_TOKEN_SECRET=your_mux_token_secret
-MUX_WEBHOOK_SECRET=your_mux_webhook_secret
 SESSION_SECRET=a_random_secret_for_session_encryption
 ```
 
