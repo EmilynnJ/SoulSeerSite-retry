@@ -2,7 +2,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs';
 import { neon } from '@neondatabase/serverless';
-import { log } from './vite.js';
+import { log } from './utils.js';
 
 if (!process.env.DATABASE_URL) {
   throw new Error('DATABASE_URL is required');

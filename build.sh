@@ -25,14 +25,13 @@ echo "Building server..."
 # Common esbuild options
 ESBUILD_COMMON_OPTS="--platform=node --packages=external --format=esm --sourcemap --minify=false"
 
-# Build server and migrations separately to avoid import conflicts
-echo "Building server..."
-npx esbuild server/index.ts \
-  $ESBUILD_COMMON_OPTS \
-  --outdir=dist
-
-echo "Building migrations..."
-npx esbuild server/run-migrations.ts \
+# Build server files
+echo "Building server files..."
+npx esbuild \
+  server/index.ts \
+  server/run-migrations.ts \
+  server/utils.ts \
+  server/db.ts \
   $ESBUILD_COMMON_OPTS \
   --outdir=dist
 
@@ -55,8 +54,14 @@ mkdir -p \
 # Copy package.json and package-lock.json for production dependencies
 cp package*.json dist/
 
+# Install production dependencies in the dist folder
+echo "Installing production dependencies..."
+cd dist && npm install --production
+cd ..
+
 # Run database migrations
 echo "Running database migrations..."
-NODE_ENV=production node --experimental-specifier-resolution=node dist/run-migrations.js
+NODE_ENV=production DATABASE_URL="postgresql://neondb_owner:npg_Pbpz9TuH5AhX@ep-lively-base-a4k2rid7.us-east-1.aws.neon.tech/neondb?sslmode=require" \
+  node --experimental-specifier-resolution=node dist/run-migrations.js
 
 echo "Build completed successfully!"
