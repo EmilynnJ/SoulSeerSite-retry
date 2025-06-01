@@ -1,266 +1,296 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { useParams } from 'wouter'; // Assuming wouter is used as per previous context
+import { useParams } from 'wouter';
 import { useAuth } from '../hooks/use-auth';
-import { useWebSocket } from '../hooks/use-websocket'; // Assuming this hook exists
-import { useWebRTC } from '../hooks/use-webrtc';
-// import { Reading } from '@shared/schema'; // Assuming Reading type is available
+import { useWebSocket } from '../hooks/use-websocket'; // Ensure this path is correct
+import { useWebRTC, WebRTCMessage } from '../hooks/use-webrtc'; // Ensure WebRTCMessage is exported or define here
+import { Reading, User } from '@shared/schema';
 
-// Placeholder for Reading type if not imported from shared schema yet
-interface Reading {
-  id: string;
-  clientId: string; // or number
-  readerId: string; // or number
-  // other fields...
+// Define ChatMessage interface
+interface ChatMessage {
+  id?: string; // Optional client-side ID for list keys, or server ID if persisted
+  readingId: string;
+  senderId: string;
+  senderName: string; // To display who sent the message
+  text: string;
+  timestamp: number;
 }
+// Define SendMessageFunction type alias from useWebRTC hook if not already globally available
+// Assuming WebRTCMessage is imported from use-webrtc or defined there.
+// If ChatMessage needs to be part of WebRTCMessage union, that should be defined in use-webrtc.tsx
+type SendMessageFunction = (message: WebRTCMessage | { type: 'chat_message', readingId: string, senderId: string, senderName: string, message: string, timestamp: number }) => void;
 
-// Placeholder UI Components (can be actual components later)
-const VideoPlayer: React.FC<{ stream: MediaStream | null, muted?: boolean }> = ({ stream, muted }) => {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  useEffect(() => {
-    if (videoRef.current && stream) {
-      videoRef.current.srcObject = stream;
+
+// Actual API call functions
+const fetchReadingDetailsFromApi = async (readingId: string): Promise<Reading | null> => {
+  try {
+    console.log(`Fetching reading details for ${readingId}...`);
+    const response = await fetch(`/api/readings/${readingId}`);
+    if (!response.ok) {
+      console.error(`Failed to fetch reading details for ${readingId}: ${response.status} ${response.statusText}`);
+      const errorBody = await response.text();
+      console.error("Error body:", errorBody);
+      return null;
     }
-  }, [stream]);
-  return <video ref={videoRef} autoPlay muted={muted} playsInline style={{ width: '300px', border: '1px solid black' }} />;
+    const data = await response.json();
+    return data as Reading;
+  } catch (error) {
+    console.error(`Error in fetchReadingDetailsFromApi for ${readingId}:`, error);
+    return null;
+  }
 };
 
-const CallControls: React.FC<{
-  onToggleMute: () => void;
-  onToggleCamera: () => void;
-  onEndCall: () => void;
-  isMuted: boolean;
-  isCameraOff: boolean;
-  isCallActive: boolean;
-}> = ({ onToggleMute, onToggleCamera, onEndCall, isMuted, isCameraOff, isCallActive }) => {
-  return (
-    <div>
-      <button onClick={onToggleMute}>{isMuted ? 'Unmute' : 'Mute'}</button>
-      <button onClick={onToggleCamera}>{isCameraOff ? 'Cam On' : 'Cam Off'}</button>
-      <button onClick={onEndCall} disabled={!isCallActive}>End Call</button>
-    </div>
-  );
-};
-
-// Placeholder fetchReadingDetails function
-const fetchReadingDetails = async (id: string): Promise<Reading | null> => {
-  console.log(`Fetching reading details for ${id}... (Placeholder)`);
-  // Replace with actual API call
-  // Example: const response = await fetch(`/api/readings/${id}`);
-  // if (!response.ok) throw new Error('Failed to fetch reading details');
-  // return response.json();
-
-  // For now, returning a mock after a delay
-  return new Promise(resolve => setTimeout(() => {
-    // Simulate fetching based on who the current user is (mocking)
-    // This logic needs to be robust based on actual API and user roles
-    const mockReaderId = "reader123";
-    const mockClientId = "client456";
-    let otherUser = '';
-    // This is a very simplified mock. In reality, you'd get this from useAuth().currentUser
-    const currentMockUserId = Math.random() > 0.5 ? mockReaderId : mockClientId;
-
-    if (currentMockUserId === mockReaderId) {
-        otherUser = mockClientId;
-    } else {
-        otherUser = mockReaderId;
+const fetchUserDetailsFromApi = async (userId: string): Promise<User | null> => {
+  try {
+    console.log(`Fetching user details for ${userId}...`);
+    // Note: Server currently has /api/readers/:id. If clients need fetching, a generic /api/users/:id might be better.
+    // For now, this will work if the other participant is usually a reader, or if IDs are interchangeable.
+    // Or, the Reading object from the first API call should ideally contain all necessary participant display info.
+    const response = await fetch(`/api/readers/${userId}`); // Using /api/readers/:id as a placeholder for general user details
+    if (!response.ok) {
+      // Attempt /api/user if the above fails and it's potentially the current user (though less likely needed for 'otherParticipant')
+      // This part is a bit speculative without knowing the exact user fetching strategy for non-reader clients.
+      // For now, we rely on /api/readers/:id or direct info from readingDetails.
+      console.error(`Failed to fetch user (reader) details for ${userId}: ${response.status} ${response.statusText}`);
+      const errorBody = await response.text();
+      console.error("Error body:", errorBody);
+      return null;
     }
-
-    resolve({
-        id,
-        clientId: mockClientId,
-        readerId: mockReaderId,
-        // otherParticipantId: otherUser // This would be determined dynamically
-    });
-  }, 1000));
+    const data = await response.json();
+    return data as User;
+  } catch (error) {
+    console.error(`Error in fetchUserDetailsFromApi for ${userId}:`, error);
+    return null;
+  }
 };
-
 
 const ReadingSessionPage: React.FC = () => {
-  const params = useParams();
-  const readingId = params.readingId;
+  const params = useParams<{ id?: string }>(); // Make id optional for initial check
+  const readingId = params.id;
   const { currentUser } = useAuth();
-  const { sendMessage, lastMessage } = useWebSocket(); // Assuming lastMessage for incoming messages
+  const { sendMessage, lastMessage, connectionStatus } = useWebSocket();
   const webRTC = useWebRTC();
 
   const [readingDetails, setReadingDetails] = useState<Reading | null>(null);
-  const [otherParticipantId, setOtherParticipantId] = useState<string | null>(null);
-  const [isSessionReady, setIsSessionReady] = useState<boolean>(false); // For call initiation logic
+  const [otherParticipant, setOtherParticipant] = useState<User | null>(null);
+  const [sessionStatus, setSessionStatus] = useState<string>("Initializing...");
   const [error, setError] = useState<string | null>(null);
+  const [chatInput, setChatInput] = useState<string>('');
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
+  const chatDisplayRef = useRef<HTMLDivElement>(null);
 
-  // Effect for initializing the session: fetching reading details, determining participants
+  // 1. Fetch Reading Details & Determine Participants
   useEffect(() => {
-    if (!readingId || !currentUser) return;
+    if (!readingId || !currentUser?.id) {
+      setError("Reading ID or user information is missing.");
+      setSessionStatus("Error: Missing reading or user information.");
+      return;
+    }
 
-    const initSession = async () => {
+    const loadReadingAndParticipantDetails = async () => {
+      setSessionStatus("Loading session details...");
       try {
-        const details = await fetchReadingDetails(readingId);
+        const details = await fetchReadingDetailsFromApi(readingId);
         if (!details) {
           setError(`Reading session ${readingId} not found.`);
+          setSessionStatus(`Error: Reading ${readingId} not found.`);
           return;
         }
         setReadingDetails(details);
 
-        const otherId = currentUser.id.toString() === details.clientId ? details.readerId : details.clientId;
-        setOtherParticipantId(otherId);
-        console.log(`Session initialized. Current user: ${currentUser.id}, Other participant: ${otherId}`);
-
-        // Simulate a "call accepted" or "ready" signal to kick off WebRTC
-        // In a real app, this might come from WebSocket after both users join the page
-        // For now, we'll assume the client (non-reader) initiates the offer after this setup.
-        if (currentUser.id.toString() !== details.readerId) { // Client initiates
-             // setIsSessionReady(true); // This would trigger offer creation
-        }
-         // Reader waits for offer.
-         // For testing, we can auto-trigger for the client
-         if (currentUser.role === 'client' && sendMessage) {
-             console.log("Client is ready, preparing to initialize and send offer.");
-             // This is a placeholder for a "user_ready_for_call" type message
-             // or directly calling initialize and then createOffer
-             setIsSessionReady(true);
-         }
-
-
-      } catch (err) {
-        console.error('Error initializing session:', err);
-        setError(err instanceof Error ? err.message : 'Failed to initialize session.');
-      }
-    };
-    initSession();
-  }, [readingId, currentUser]);
-
-  // Effect for WebRTC initialization once other participant is known and sendMessage is available
-  useEffect(() => {
-    if (readingId && currentUser && otherParticipantId && sendMessage && webRTC.initializePeerConnection) {
-        console.log(`Initializing peer connection for reading ${readingId}, user ${currentUser.id} to ${otherParticipantId}`);
-        webRTC.initializePeerConnection(readingId, currentUser.id.toString(), otherParticipantId, sendMessage as SendMessageFunction);
-    }
-  }, [readingId, currentUser, otherParticipantId, sendMessage, webRTC.initializePeerConnection]);
-
-
-  // Effect for starting local media once peer connection is initialized (or earlier if preferred)
-  useEffect(() => {
-    if (peerConnectionRef.current || webRTC.peerConnection) { // Check if PC is initialized
-        webRTC.startLocalMedia();
-    }
-  }, [webRTC.startLocalMedia, webRTC.peerConnection]); // Depend on peerConnection being set
-
-
-  // Effect for handling incoming WebSocket messages for WebRTC signaling
-  useEffect(() => {
-    if (lastMessage && readingDetails && currentUser && otherParticipantId && sendMessage) {
-      try {
-        const message = typeof lastMessage === 'string' ? JSON.parse(lastMessage) : lastMessage;
-
-        if (message.readingId !== readingId) {
-          // console.log("WebSocket message for a different reading, ignoring.");
+        const otherPId = currentUser.id.toString() === details.clientId.toString() ? details.readerId.toString() : details.clientId.toString();
+        const otherPDetails = await fetchUserDetailsFromApi(otherPId);
+        if (!otherPDetails) {
+          setError(`Other participant (ID: ${otherPId}) not found.`);
+          setSessionStatus(`Error: Other participant not found.`);
           return;
         }
+        setOtherParticipant(otherPDetails);
+        setSessionStatus("Session details loaded. Initializing call environment...");
+        console.log(`Session details loaded. Current user: ${currentUser.id}, Other participant: ${otherPId}`);
 
-        console.log('Received WebSocket message:', message.type, message);
-
-        switch (message.type) {
-          case 'webrtc_offer':
-            if (message.recipientId === currentUser.id.toString()) {
-              console.log("Handling received WebRTC offer from:", message.senderId);
-              webRTC.handleReceivedOffer(message.payload.sdp, readingId!, message.senderId, currentUser.id.toString(), sendMessage as SendMessageFunction);
-            }
-            break;
-          case 'webrtc_answer':
-            if (message.recipientId === currentUser.id.toString()) {
-              console.log("Handling received WebRTC answer from:", message.senderId);
-              webRTC.handleReceivedAnswer(message.payload.sdp);
-            }
-            break;
-          case 'webrtc_ice_candidate':
-            if (message.recipientId === currentUser.id.toString()) {
-              console.log("Handling received WebRTC ICE candidate from:", message.senderId);
-              webRTC.handleReceivedIceCandidate(message.payload.candidate);
-            }
-            break;
-          case 'webrtc_end_call':
-             if (message.recipientId === currentUser.id.toString() || message.senderId === currentUser.id.toString()) {
-                console.log("Received end call signal from:", message.senderId);
-                webRTC.closeConnection(); // Local cleanup
-                // UI update to show call ended
-                setError("Call ended by other user.");
-             }
-            break;
-          // Example of a custom message to trigger call initiation
-          case 'reader_accepted_call': // Or 'user_joined_session', 'call_initiate_request'
-            if (readingDetails && currentUser?.id.toString() === readingDetails.clientId && otherParticipantId) {
-              console.log("Reader accepted, client creating offer.");
-              webRTC.createOfferAndSend(readingId!, otherParticipantId, currentUser.id.toString(), sendMessage as SendMessageFunction);
-            }
-            setIsSessionReady(true);
-            break;
-          default:
-            // console.log('Received unhandled WebSocket message type:', message.type);
-            break;
-        }
-      } catch (e) {
-        console.error("Error processing WebSocket message:", e);
+      } catch (err) {
+        console.error('Error loading reading/participant details:', err);
+        setError(err instanceof Error ? err.message : 'Failed to load session details.');
+        setSessionStatus("Error loading session details.");
       }
-    }
-  }, [lastMessage, readingId, readingDetails, currentUser, otherParticipantId, webRTC, sendMessage]);
+    };
 
-  // Assign streams to video elements
+    loadReadingAndParticipantDetails();
+  }, [readingId, currentUser]);
+
+  // 2. Initialize useWebRTC and Local Media
+  useEffect(() => {
+    if (readingId && currentUser && otherParticipant && sendMessage && webRTC.initializePeerConnection) {
+      setSessionStatus("Initializing WebRTC peer connection...");
+      webRTC.initializePeerConnection(
+        readingId,
+        currentUser.id.toString(),
+        otherParticipant.id.toString(),
+        sendMessage as SendMessageFunction // Cast if WebRTCMessage is more specific
+      ).then(() => {
+        setSessionStatus("Peer connection initialized. Requesting media access...");
+        return webRTC.startLocalMedia();
+      }).then(() => {
+        setSessionStatus("Local media ready. Waiting for call signal...");
+      }).catch(err => {
+        console.error("Error during WebRTC init or local media start:", err);
+        setError(err.message || "Failed to initialize WebRTC or start media.");
+        setSessionStatus("Error initializing call.");
+      });
+    }
+  }, [currentUser, otherParticipant, readingId, sendMessage, webRTC.initializePeerConnection, webRTC.startLocalMedia, webRTC.createOfferAndSend, readingDetails]);
+
+
+  // 3. Assign Streams to Video Elements
   useEffect(() => {
     if (localVideoRef.current && webRTC.localStream) {
+      console.log("Assigning local stream to video element");
       localVideoRef.current.srcObject = webRTC.localStream;
     }
   }, [webRTC.localStream]);
 
   useEffect(() => {
     if (remoteVideoRef.current && webRTC.remoteStream) {
+      console.log("Assigning remote stream to video element");
       remoteVideoRef.current.srcObject = webRTC.remoteStream;
     }
   }, [webRTC.remoteStream]);
 
-  const handleEndCall = () => {
-    if (currentUser && readingId && otherParticipantId && sendMessage) {
-      webRTC.closeConnection(sendMessage as SendMessageFunction, readingId, otherParticipantId, currentUser.id.toString());
-    } else {
-      webRTC.closeConnection(); // Fallback for local cleanup if context is missing
+  // 4. WebSocket Message Handling
+  useEffect(() => {
+    if (lastMessage && readingId && currentUser && otherParticipant && sendMessage) {
+      const message = (typeof lastMessage === 'string' ? JSON.parse(lastMessage) : lastMessage) as WebRTCMessage;
+
+      if (message.readingId !== readingId) return;
+      if (message.recipientId !== currentUser.id.toString()) {
+        // console.log("Received a WebRTC message not intended for me:", message);
+        return;
+      }
+
+
+      console.log('Received WebSocket message for WebRTC:', message.type);
+
+      switch (message.type) {
+        // WebRTC Cases
+        case 'webrtc_offer':
+          setSessionStatus("Receiving call...");
+          webRTC.handleReceivedOffer(message.payload, message.readingId, message.senderId, currentUser.id.toString(), sendMessage as SendMessageFunction);
+          break;
+        case 'webrtc_answer':
+          setSessionStatus("Call connected!");
+          webRTC.handleReceivedAnswer(message.payload);
+          break;
+        case 'webrtc_ice_candidate':
+          webRTC.handleReceivedIceCandidate(message.payload);
+          break;
+        case 'webrtc_end_call':
+          setSessionStatus("Call ended by other user.");
+          webRTC.closeConnection();
+          setError("Call ended.");
+          break;
+        case 'CALL_SETUP_READY':
+          if (message.offerInitiatorId === currentUser.id.toString()) {
+            setSessionStatus("Reader accepted. Initiating call...");
+            console.log(`CALL_SETUP_READY: Current user ${currentUser.id} is offer initiator. Creating offer for ${otherParticipant?.id}.`);
+            if (otherParticipant) {
+              webRTC.createOfferAndSend(readingId, otherParticipant.id.toString(), currentUser.id.toString(), sendMessage as SendMessageFunction);
+            }
+          } else {
+            setSessionStatus("Reader accepted. Waiting for call to be initiated by client...");
+            console.log(`CALL_SETUP_READY: Current user ${currentUser?.id} is NOT offer initiator. Waiting for offer from ${message.offerInitiatorId}.`);
+          }
+          break;
+        // Chat Message Case
+        case 'chat_message':
+          if (message.readingId === readingId) {
+            const newChatMessage: ChatMessage = {
+              readingId: message.readingId,
+              senderId: message.senderId,
+              senderName: message.senderName || 'User', // Fallback senderName
+              text: message.message, // Server sends 'message' for text content
+              timestamp: message.timestamp || Date.now(),
+            };
+            setChatMessages(prevMessages => [...prevMessages, newChatMessage]);
+          }
+          break;
+        default:
+          break;
+      }
     }
-    setError("Call ended.");
+  }, [lastMessage, readingId, currentUser, otherParticipant, webRTC, sendMessage]);
+
+  // Auto-scroll chat
+  useEffect(() => {
+    if (chatDisplayRef.current) {
+      chatDisplayRef.current.scrollTop = chatDisplayRef.current.scrollHeight;
+    }
+  }, [chatMessages]);
+
+  // 5. Call Controls Handlers
+  const handleSendChatMessage = (e?: React.FormEvent<HTMLFormElement>) => {
+    e?.preventDefault();
+    if (chatInput.trim() === '' || !currentUser || !readingId || !sendMessage) return;
+
+    const payload = {
+      type: 'chat_message',
+      readingId: readingId,
+      senderId: currentUser.id.toString(),
+      senderName: currentUser.username || currentUser.fullName || "Me",
+      message: chatInput.trim(), // server expects 'message' field for chat text
+      timestamp: Date.now()
+    };
+    sendMessage(payload);
+
+    // Optimistic update: Add message to local state immediately
+    // This provides a better UX. Ensure server doesn't echo back the sender's own message
+    // or handle potential duplicates if it does (e.g. via message ID if available later)
+    setChatMessages(prevMessages => [...prevMessages, {
+      ...payload,
+      text: payload.message,
+      senderName: "Me"
+    }]);
+    setChatInput('');
   };
 
-  // Placeholder for initiating call if current user is client and session is ready
-  // This might be triggered by a button or automatically after initialization
-  useEffect(() => {
-      if (isSessionReady && readingId && currentUser && otherParticipantId && sendMessage && currentUser.role === 'client' && webRTC.peerConnection && webRTC.peerConnection.signalingState === 'stable') {
-          console.log(`Client is ready, creating and sending offer to ${otherParticipantId}`);
-          webRTC.createOfferAndSend(readingId, otherParticipantId, currentUser.id.toString(), sendMessage as SendMessageFunction);
-          setIsSessionReady(false); // Reset after attempting to send offer
-      }
-  }, [isSessionReady, readingId, currentUser, otherParticipantId, sendMessage, webRTC]);
+  const handleEndCall = useCallback(() => {
+    if (readingId && currentUser && otherParticipant && sendMessage) {
+      webRTC.closeConnection(sendMessage as SendMessageFunction, readingId, currentUser.id.toString(), otherParticipant.id.toString());
+    } else {
+      webRTC.closeConnection(); // Fallback for local cleanup
+    }
+    setSessionStatus("Call ended.");
+  }, [webRTC, sendMessage, readingId, otherParticipant, currentUser]);
 
 
+  // Initial UI States
+  if (!readingId) return <p>No reading ID specified.</p>;
   if (error) return <p style={{ color: 'red' }}>Error: {error}</p>;
-  if (!readingDetails || !currentUser || !readingId) return <p>Loading session details...</p>;
-  if (!otherParticipantId) return <p>Waiting for other participant details...</p>;
-   // if (!webRTC.peerConnection) return <p>Initializing WebRTC...</p>; // Could be too flickery
+  if (!readingDetails || !currentUser || !otherParticipant) {
+    return <div><p>{sessionStatus}</p><p>Loading session, please wait...</p></div>;
+  }
 
   return (
-    <div style={{ padding: '20px' }}>
+    <div style={{ padding: '20px', fontFamily: 'Arial, sans-serif' }}>
       <h1>Reading Session: {readingId}</h1>
-      <p>Your User ID: {currentUser.id} | Role: {currentUser.role}</p>
-      <p>Other Participant ID: {otherParticipantId}</p>
-      <p>Call Status: {webRTC.isCallActive ? 'Active' : 'Inactive'}</p>
-      <p>Local Stream: {webRTC.localStream ? 'Present' : 'Not Present'}</p>
-      <p>Remote Stream: {webRTC.remoteStream ? 'Present' : 'Not Present'}</p>
+      <p>Status: <span style={{ fontWeight: 'bold' }}>{sessionStatus}</span></p>
+      <p>WebSocket: {connectionStatus}</p>
+      <p>User: {currentUser.username} ({currentUser.id}) | Other: {otherParticipant.username} ({otherParticipant.id})</p>
 
-      <div style={{ display: 'flex', gap: '20px', marginBottom: '20px' }}>
-        <div>
-          <h2>My Video</h2>
-          <video ref={localVideoRef} autoPlay muted playsInline style={{ width: '320px', height: '240px', border: '1px solid #ccc', backgroundColor: '#000' }} />
+      <div style={{ display: 'flex', gap: '20px', margin: '20px 0' }}>
+        <div style={{ border: '1px solid #ccc', padding: '10px' }}>
+          <h2>My Video ({webRTC.isMuted ? "Muted" : "Unmuted"}, {webRTC.isCameraOff ? "Cam Off" : "Cam On"})</h2>
+          {webRTC.localStream ? (
+            <video ref={localVideoRef} autoPlay muted playsInline style={{ width: '320px', height: '240px', backgroundColor: '#000' }} />
+          ) : <p>No local camera/mic stream.</p>}
         </div>
-        <div>
+        <div style={{ border: '1px solid #ccc', padding: '10px' }}>
           <h2>Remote Video</h2>
-          <video ref={remoteVideoRef} autoPlay playsInline style={{ width: '320px', height: '240px', border: '1px solid #ccc', backgroundColor: '#000' }} />
+          {webRTC.remoteStream ? (
+            <video ref={remoteVideoRef} autoPlay playsInline style={{ width: '320px', height: '240px', backgroundColor: '#000' }} />
+          ) : <p>{webRTC.isCallActive ? "Waiting for remote video..." : "Remote video not available."}</p>}
         </div>
       </div>
 
@@ -273,12 +303,78 @@ const ReadingSessionPage: React.FC = () => {
         isCallActive={webRTC.isCallActive}
       />
 
-      {/* Placeholder for ChatWindow */}
-      <div style={{ marginTop: '20px', border: '1px solid #eee', padding: '10px', minHeight: '100px' }}>
-        <p>Chat Window Placeholder</p>
+      {/* Placeholder for Chat (can be a separate component) */}
+      <div style={{ marginTop: '30px', borderTop: '1px solid #eee', paddingTop: '20px', maxWidth: '680px', margin: 'auto' }}>
+        <h2>Chat</h2>
+        <div ref={chatDisplayRef} style={{ height: '300px', overflowY: 'auto', border: '1px solid #ddd', padding: '10px', marginBottom: '10px', borderRadius: '4px', background: '#f9f9f9' }}>
+          {chatMessages.map((msg, index) => (
+            <div
+              key={msg.id || index}
+              style={{
+                marginBottom: '10px',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: msg.senderId === currentUser?.id.toString() ? 'flex-end' : 'flex-start'
+              }}
+            >
+              <div style={{ fontSize: '0.75em', color: '#555', marginBottom: '2px' }}>
+                {msg.senderId === currentUser?.id.toString() ? "Me" : msg.senderName}
+                {' @ '}
+                {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </div>
+              <div
+                style={{
+                  padding: '8px 12px',
+                  borderRadius: '15px',
+                  backgroundColor: msg.senderId === currentUser?.id.toString() ? '#007bff' : '#e9ecef',
+                  color: msg.senderId === currentUser?.id.toString() ? 'white' : 'black',
+                  maxWidth: '75%',
+                  wordWrap: 'break-word',
+                  textAlign: 'left',
+                  borderBottomLeftRadius: msg.senderId !== currentUser?.id.toString() ? '0px' : '15px',
+                  borderBottomRightRadius: msg.senderId === currentUser?.id.toString() ? '0px' : '15px',
+                }}
+              >
+                {msg.text}
+              </div>
+            </div>
+          ))}
+          {chatMessages.length === 0 && <p style={{textAlign: 'center', color: '#888'}}>No messages yet. Start the conversation!</p>}
+        </div>
+        <form onSubmit={handleSendChatMessage} style={{ display: 'flex', gap: '10px' }}>
+          <input
+            type="text"
+            value={chatInput}
+            onChange={(e) => setChatInput(e.target.value)}
+            placeholder="Type a message..."
+            style={{ flexGrow: 1, padding: '10px', borderRadius: '20px', border: '1px solid #ccc' }}
+            onKeyPress={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                handleSendChatMessage();
+                e.preventDefault(); // Prevents newline in some browsers
+              }
+            }}
+          />
+          <button
+            type="submit"
+            style={{
+              padding: '10px 20px',
+              borderRadius: '20px',
+              border: 'none',
+              backgroundColor: '#007bff',
+              color: 'white',
+              cursor: 'pointer'
+            }}
+            disabled={!sendMessage || chatInput.trim() === ''}
+          >
+            Send
+          </button>
+        </form>
       </div>
     </div>
   );
 };
 
 export default ReadingSessionPage;
+
+[end of client/src/pages/ReadingSessionPage.tsx]
