@@ -1461,12 +1461,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // WebRTC Configuration Endpoint
-  app.get("/api/webrtc/config/:readingId", async (req, res) => {
-    if (!req.isAuthenticated()) {
-      return res.status(401).json({ message: "Not authenticated" });
-    }
-
     try {
       const readingId = parseInt(req.params.readingId);
       if (isNaN(readingId)) {
