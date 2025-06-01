@@ -9,7 +9,6 @@ import { db } from "./db";
 import { desc, asc } from "drizzle-orm";
 import { gifts } from "@shared/schema";
 import stripe from "./services/stripe-client.js"; // Corrected import for stripe instance
-import stripeClient from "./services/stripe-client";
 // TRTC has been completely removed
 // import * as muxClient from "./services/mux-client"; // Mux client removed
 import { scrypt, randomBytes, timingSafeEqual } from "crypto";
