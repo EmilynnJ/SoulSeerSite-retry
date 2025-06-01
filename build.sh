@@ -30,11 +30,30 @@ echo "Building server files..."
 npx esbuild \
   server/*.ts \
   $ESBUILD_COMMON_OPTS \
-  --outdir=dist/server
+  --outdir=dist
 
-# Create main server entry point
+# Copy all compiled files to server directory for proper imports
+echo "Organizing server files..."
+mkdir -p dist/server
+mv dist/*.js dist/*.js.map dist/server/ 2>/dev/null || :
+
+# Create main server entry point that points to the correct location
 echo "Creating server entry point..."
-echo "import './server/server.js';" > dist/index.js
+cat > dist/index.js << 'EOL'
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+import { createRequire } from 'module';
+
+// Setup __dirname equivalent for ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+globalThis.__dirname = __dirname;
+globalThis.__filename = __filename;
+globalThis.require = createRequire(import.meta.url);
+
+// Import server
+import './server/server.js';
+EOL
 
 # Copy required files
 echo "Copying static files..."
@@ -63,6 +82,6 @@ cd ..
 # Run database migrations
 echo "Running database migrations..."
 NODE_ENV=production DATABASE_URL="postgresql://neondb_owner:npg_Pbpz9TuH5AhX@ep-lively-base-a4k2rid7.us-east-1.aws.neon.tech/neondb?sslmode=require" \
-  node --experimental-specifier-resolution=node dist/run-migrations.js
+  node --experimental-specifier-resolution=node dist/server/run-migrations.js
 
 echo "Build completed successfully!"
