@@ -436,34 +436,6 @@ export default function LivestreamDetailPage() {
                   </div>
                 </div>
               ) : livestream.status === "live" && livestream.playbackId ? (
-                <MuxPlayerErrorBoundary>
-                  <MuxPlayer
-                    playbackId={livestream.playbackId}
-                    style={{ height: "100%", width: "100%" }}
-                    streamType="live"
-                    autoPlay
-                    muted={false}
-                    metadata={{ 
-                      video_title: livestream.title || "Live Psychic Session",
-                      player_name: "SoulSeer Live Stream"
-                    }}
-                  />
-                </MuxPlayerErrorBoundary>
-              ) : livestream.status === "ended" && livestream.muxAssetId && livestream.playbackId ? (
-                <MuxPlayerErrorBoundary>
-                  <MuxPlayer
-                    playbackId={livestream.playbackId}
-                    style={{ height: "100%", width: "100%" }}
-                    streamType="on-demand"
-                    autoPlay={false}
-                    muted={false}
-                    metadata={{ 
-                      video_title: livestream.title || "Recorded Psychic Session",
-                      player_name: "SoulSeer Replay"
-                    }}
-                  />
-                </MuxPlayerErrorBoundary>
-              ) : (
                 <div className="flex items-center justify-center bg-dark/50 h-full">
                   {livestream.status === "scheduled" ? (
                     <div className="text-center p-8">
