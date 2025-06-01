@@ -15,7 +15,6 @@ import { CelestialButton } from "@/components/ui/celestial-button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useEffect, useState } from "react";
-import MuxPlayer from "@mux/mux-player-react";
 
 export default function LivestreamPage() {
   const [searchTerm, setSearchTerm] = useState("");
@@ -111,9 +110,6 @@ export default function LivestreamPage() {
             {activeLivestreams.map((livestream) => (
               <GlowCard key={livestream.id} className="rounded-2xl overflow-hidden p-0">
                 <div className="relative">
-                  {livestream.playbackId ? (
-                    <MuxPlayer
-                      playbackId={livestream.playbackId}
                       thumbnailTime={0}
                       style={{ height: '200px', width: '100%' }}
                       streamType="on-demand"
