@@ -158,8 +158,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           console.error('Webhook Error: Missing userId or amountReceived in paymentIntent metadata for account_funding.');
           return res.status(400).send('Webhook Error: Missing metadata.');
         }
-        
-        const userId = parseInt(userIdString);
+
+         const userId = parseInt(userIdString);
         if (isNaN(userId)) {
           console.error(`Webhook Error: Invalid userId format: ${userIdString}`);
           return res.status(400).send('Webhook Error: Invalid userId.');
@@ -1460,6 +1460,68 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     }
   });
+
+    try {
+      const readingId = parseInt(req.params.readingId);
+      if (isNaN(readingId)) {
+        return res.status(400).json({ message: "Invalid reading ID format." });
+      }
+
+      const reading = await storage.getReading(readingId);
+      if (!reading) {
+        return res.status(404).json({ message: "Reading not found." });
+      }
+
+      // Authorize: only participants of the reading can get ICE config
+      if (req.user.id !== reading.clientId && req.user.id !== reading.readerId) {
+        return res.status(403).json({ message: "Forbidden: You are not a participant in this reading." });
+      }
+
+      let iceServers: RTCIceServer[] = []; // Define type for iceServers array
+
+      // Parse STUN servers from WEBRTC_ICE_SERVERS
+      const webrtcIceServersJson = process.env.WEBRTC_ICE_SERVERS;
+      if (webrtcIceServersJson) {
+        try {
+          iceServers = JSON.parse(webrtcIceServersJson);
+        } catch (e) {
+          console.error('Error parsing WEBRTC_ICE_SERVERS:', e);
+          // Add a default STUN server if parsing fails and none were added
+          if (iceServers.length === 0) {
+            iceServers.push({ urls: 'stun:stun.l.google.com:19302' });
+          }
+        }
+      } else {
+        // Add a default STUN server if none configured
+        iceServers.push({ urls: 'stun:stun.l.google.com:19302' });
+      }
+
+      // Add TURN servers if configured
+      const turnServersString = process.env.TURN_SERVERS;
+      const turnUsername = process.env.TURN_USERNAME;
+      const turnCredential = process.env.TURN_CREDENTIAL;
+
+      if (turnServersString && turnUsername && turnCredential) {
+        const turnUrls = turnServersString.split(',');
+        for (const url of turnUrls) {
+          if (url.trim()) { // Ensure URL is not empty
+            iceServers.push({
+              urls: url.trim().startsWith('turn:') ? url.trim() : `turn:${url.trim()}`,
+              username: turnUsername,
+              credential: turnCredential,
+            });
+          }
+        }
+      }
+
+      console.log(`ICE Servers for reading ${readingId}:`, JSON.stringify(iceServers));
+      res.json({ iceServers });
+
+    } catch (error) {
+      console.error("Error fetching WebRTC config:", error);
+      res.status(500).json({ message: "Failed to fetch WebRTC configuration." });
+    }
+  };
 
   // WebRTC Configuration Endpoint
   app.get("/api/webrtc/config/:readingId", async (req, res) => {
@@ -2852,4 +2914,4 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   return httpServer;
-}
+});
