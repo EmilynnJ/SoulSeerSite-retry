@@ -2,8 +2,8 @@ import { users, type User, type InsertUser, type UserUpdate, readings, type Read
 import session from "express-session";
 import createMemoryStore from "memorystore";
 import connectPgSimple from "connect-pg-simple";
-import { db } from "./db";
-import { pool } from "./database";
+import { db } from "./db.js";
+import { pool } from "./database.js";
 import { eq, and, or, desc, isNull, asc, sql } from "drizzle-orm";
 
 const MemoryStore = createMemoryStore(session);

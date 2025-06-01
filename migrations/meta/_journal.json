@@ -1,0 +1,13 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1748782667371,
+      "tag": "0000_remove_mux_fields_from_livestreams",
+      "breakpoints": true
+    }
+  ]
+}
