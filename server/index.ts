@@ -12,13 +12,30 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
-// Serve uploads directory directly in both development and production
-const uploadsPath = path.join(process.cwd(), 'public', 'uploads');
-const imagesPath = path.join(process.cwd(), 'public', 'images');
+// Setup static file serving
+const staticPaths = {
+  uploads: path.join(process.cwd(), 'public', 'uploads'),
+  images: path.join(process.cwd(), 'public', 'images'),
+  assets: path.join(process.cwd(), 'public', 'assets')
+};
 
-// Serve uploads and images directories
-app.use('/uploads', express.static(uploadsPath));
-app.use('/images', express.static(imagesPath));
+// Ensure directories exist
+Object.values(staticPaths).forEach(dir => {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+});
+
+// Serve static directories with caching
+app.use('/uploads', express.static(staticPaths.uploads, {
+  maxAge: '1d', // Cache for 1 day
+}));
+app.use('/images', express.static(staticPaths.images, {
+  maxAge: '7d', // Cache for 7 days
+}));
+app.use('/assets', express.static(staticPaths.assets, {
+  maxAge: '7d', // Cache for 7 days
+}));
 
 console.log(`Serving uploads from: ${uploadsPath} with fallback to default images`);
 

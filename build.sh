@@ -8,9 +8,12 @@ mkdir -p dist/public/uploads
 echo "Installing dependencies..."
 npm install
 
+# Ensure node_modules/.bin is in PATH
+export PATH="./node_modules/.bin:$PATH"
+
 # Build the client
 echo "Building client..."
-npx vite build
+NODE_ENV=production vite build
 
 # Build the server with ES Module compatibility fixes
 echo "Building server..."
