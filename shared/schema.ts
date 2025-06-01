@@ -200,7 +200,7 @@ export const insertLivestreamSchema = createInsertSchema(livestreams)
     startedAt: true, 
     endedAt: true, 
     viewerCount: true,
-    duration: true
+    duration: true,
     // muxAssetId removed as the field is deleted
   });
 
