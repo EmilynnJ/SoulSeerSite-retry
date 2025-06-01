@@ -158,7 +158,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           console.error('Webhook Error: Missing userId or amountReceived in paymentIntent metadata for account_funding.');
           return res.status(400).send('Webhook Error: Missing metadata.');
         }
-        
+
         const userId = parseInt(userIdString);
         if (isNaN(userId)) {
           console.error(`Webhook Error: Invalid userId format: ${userIdString}`);
