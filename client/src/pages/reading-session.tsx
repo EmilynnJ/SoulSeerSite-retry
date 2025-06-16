@@ -4,14 +4,15 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '@/hooks/use-auth';
 import { useToast } from '@/hooks/use-toast';
 import { useWebSocketContext } from '@/hooks/websocket-provider';
+import { useWebRTC } from '@/hooks/use-webrtc';
 import { Reading } from '@shared/schema';
-// import { VideoCallMux } from '@/components/readings/video-call-mux'; // Mux component removed
+import { VideoCall } from '@/components/readings/video-call';
 import { apiRequest } from '@/lib/queryClient';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Separator } from '@/components/ui/separator';
-import { Clock, MessageCircle, MessageSquare, Video, Phone, Mic } from 'lucide-react';
+import { Clock, MessageCircle, MessageSquare, Video, Phone, Mic, MicOff } from 'lucide-react';
 import { LoadingSpinner } from '@/components/ui/loading-spinner';
 
 export default function ReadingSessionPage() {
@@ -26,10 +27,29 @@ export default function ReadingSessionPage() {
   const [messageInput, setMessageInput] = useState('');
   const [sessionStarted, setSessionStarted] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
+  const [webrtcCallActive, setWebrtcCallActive] = useState(false);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   
   // Use the WebSocket context instead of creating a direct connection
   const { status, sendMessage, lastMessage, reconnect } = useWebSocketContext();
+  
+  // Use WebRTC hook for video/voice calls
+  const {
+    localStream,
+    remoteStream,
+    isCallActive,
+    isMuted: webrtcMuted,
+    isCameraOff,
+    initializePeerConnection,
+    startLocalMedia,
+    createOfferAndSend,
+    handleReceivedOffer,
+    handleReceivedAnswer,
+    handleReceivedIceCandidate,
+    toggleMute,
+    toggleCamera,
+    closeConnection
+  } = useWebRTC();
 
   // Get reading session data
   const { data: reading, isLoading } = useQuery<Reading>({
@@ -37,6 +57,9 @@ export default function ReadingSessionPage() {
     enabled: !!params?.id && !!user,
     refetchInterval: 5000, // Refresh every 5 seconds to update status
   });
+  
+  // Determine if the current user is the reader
+  const isReader = user?.id === reading?.readerId;
   
   // Get user balance
   const { data: userBalance } = useQuery({
@@ -191,13 +214,55 @@ export default function ReadingSessionPage() {
         return;
       }
       
+      // Handle WebRTC signaling messages
+      if (lastMessage.type === 'webrtc_offer' && lastMessage.readingId === reading.id.toString()) {
+        if (isReader && lastMessage.recipientId === user.id) {
+          handleReceivedOffer(
+            lastMessage.payload,
+            reading.id.toString(),
+            lastMessage.senderId.toString(),
+            user.id.toString(),
+            sendMessage
+          );
+          setWebrtcCallActive(true);
+          setSessionStarted(true);
+        }
+      } else if (lastMessage.type === 'webrtc_answer' && lastMessage.readingId === reading.id.toString()) {
+        if (lastMessage.recipientId === user.id) {
+          handleReceivedAnswer(lastMessage.payload);
+        }
+      } else if (lastMessage.type === 'webrtc_ice_candidate' && lastMessage.readingId === reading.id.toString()) {
+        if (lastMessage.recipientId === user.id) {
+          handleReceivedIceCandidate(lastMessage.payload);
+        }
+      } else if (lastMessage.type === 'CALL_SETUP_READY' && lastMessage.readingId === reading.id) {
+        if (isReader && lastMessage.readerId === user.id) {
+          // Reader should prepare for incoming call
+          startLocalMedia().then(() => {
+            initializePeerConnection(
+              reading.id.toString(),
+              user.id.toString(),
+              reading.clientId.toString(),
+              sendMessage
+            );
+            
+            // Notify server that reader is connected
+            sendMessage({
+              type: 'WEBRTC_CALL_CONNECTED',
+              readingId: reading.id.toString(),
+              userId: user.id
+            });
+          });
+        }
+      }
+      
       // Only handle messages for this reading
       if (lastMessage.readingId === reading.id && lastMessage.type === 'chat_message') {
         console.log("Adding chat message to UI:", lastMessage);
         
         // Don't duplicate messages that were already added locally
-        const isDuplicate = chatMessages.some(msg => 
-          msg.message === lastMessage.message && 
+        const isDuplicate = chatMessages.some(msg =>
+          msg.message === lastMessage.message &&
           msg.sender === (lastMessage.senderId === user.id ? 'You' : lastMessage.senderName) &&
           Math.abs(msg.timestamp - lastMessage.timestamp) < 5000 // within 5 seconds
         );
@@ -218,7 +283,7 @@ export default function ReadingSessionPage() {
     } catch (error) {
       console.error("Error processing WebSocket message:", error);
     }
-  }, [lastMessage, reading, user, chatMessages, sessionStarted]);
+  }, [lastMessage, reading, user, chatMessages, sessionStarted, isReader, handleReceivedOffer, handleReceivedAnswer, handleReceivedIceCandidate, sendMessage, startLocalMedia, initializePeerConnection]);
   
   // Update total cost whenever elapsed time changes
   useEffect(() => {
@@ -279,9 +344,6 @@ export default function ReadingSessionPage() {
   const formatTime = (timestamp: number) => {
     return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
-  
-  // Determine if the current user is the reader
-  const isReader = user?.id === reading?.readerId;
   
   if (isLoading || !reading || !user) {
     return (
@@ -364,7 +426,140 @@ export default function ReadingSessionPage() {
             {/* Video Call UI */}
             {reading.type === 'video' && (
               <TabsContent value="video" className="h-[400px]">
-                <div>Video call UI placeholder</div>
+                <div className="h-full">
+                  {webrtcCallActive || isCallActive ? (
+                    <div className="h-full relative">
+                      {/* Remote video (main view) */}
+                      <div className="h-full bg-black rounded-lg relative overflow-hidden">
+                        {remoteStream ? (
+                          <video
+                            ref={ref => {
+                              if (ref && remoteStream) {
+                                ref.srcObject = remoteStream;
+                              }
+                            }}
+                            autoPlay
+                            playsInline
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <div className="flex items-center justify-center h-full text-white">
+                            <div className="text-center">
+                              <Video className="h-16 w-16 mx-auto mb-4 opacity-50" />
+                              <p>Waiting for {isReader ? 'client' : 'reader'} to join...</p>
+                            </div>
+                          </div>
+                        )}
+                        
+                        {/* Local video (picture-in-picture) */}
+                        {localStream && (
+                          <div className="absolute bottom-4 right-4 w-32 h-24 bg-gray-900 rounded-lg overflow-hidden border-2 border-primary">
+                            <video
+                              ref={ref => {
+                                if (ref && localStream) {
+                                  ref.srcObject = localStream;
+                                }
+                              }}
+                              autoPlay
+                              playsInline
+                              muted
+                              className="w-full h-full object-cover"
+                            />
+                          </div>
+                        )}
+                        
+                        {/* Call controls overlay */}
+                        <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 flex gap-2">
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            onClick={toggleMute}
+                            className={`${webrtcMuted ? 'bg-red-500 hover:bg-red-600' : 'bg-white/20 hover:bg-white/30'} backdrop-blur-sm`}
+                          >
+                            {webrtcMuted ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+                          </Button>
+                          
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            onClick={toggleCamera}
+                            className={`${isCameraOff ? 'bg-red-500 hover:bg-red-600' : 'bg-white/20 hover:bg-white/30'} backdrop-blur-sm`}
+                          >
+                            {isCameraOff ? <Video className="h-4 w-4" /> : <Video className="h-4 w-4" />}
+                          </Button>
+                          
+                          <Button
+                            variant="destructive"
+                            size="icon"
+                            onClick={() => {
+                              closeConnection();
+                              setWebrtcCallActive(false);
+                              handleEndReading();
+                            }}
+                            className="bg-red-500 hover:bg-red-600"
+                          >
+                            <Phone className="h-4 w-4 rotate-135" />
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="h-full flex flex-col items-center justify-center">
+                      <Video className="h-24 w-24 text-primary mb-4" />
+                      <h3 className="text-lg font-medium mb-2">Video Call Ready</h3>
+                      <p className="text-muted-foreground text-center mb-6">
+                        {isReader
+                          ? "Waiting for client to start the video call"
+                          : "Click the button below to start your video call"
+                        }
+                      </p>
+                      
+                      {!isReader && (
+                        <Button
+                          onClick={async () => {
+                            try {
+                              await startLocalMedia();
+                              await initializePeerConnection(
+                                reading.id.toString(),
+                                user.id.toString(),
+                                reading.readerId.toString(),
+                                sendMessage
+                              );
+                              
+                              // Send call setup notification
+                              sendMessage({
+                                type: 'WEBRTC_CALL_CONNECTED',
+                                readingId: reading.id.toString(),
+                                userId: user.id
+                              });
+                              
+                              setWebrtcCallActive(true);
+                              setSessionStarted(true);
+                              
+                              // Create offer if client initiated
+                              await createOfferAndSend(
+                                reading.id.toString(),
+                                reading.readerId.toString(),
+                                user.id.toString(),
+                                sendMessage
+                              );
+                            } catch (error) {
+                              console.error('Error starting video call:', error);
+                              toast({
+                                title: 'Error',
+                                description: 'Failed to start video call',
+                                variant: 'destructive'
+                              });
+                            }
+                          }}
+                          className="bg-green-600 hover:bg-green-700"
+                        >
+                          Start Video Call
+                        </Button>
+                      )}
+                    </div>
+                  )}
+                </div>
               </TabsContent>
             )}
             

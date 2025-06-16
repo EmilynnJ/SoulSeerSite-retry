@@ -5,7 +5,7 @@ import { log } from './vite.js';
 neonConfig.fetchConnectionCache = true;
 
 // Use the connection URL from environment variables
-const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://neondb_owner:npg_GvNe3Z2qKHoB@ep-lively-frog-a66uvr1j.us-west-2.aws.neon.tech/neondb?sslmode=require';
+const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://neondb_owner:npg_Pbpz9TuH5AhX@ep-lively-base-a4k2rid7-pooler.us-east-1.aws.neon.tech/neondb?sslmode=require';
 
 const sql = neon(DATABASE_URL);
 

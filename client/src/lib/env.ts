@@ -34,7 +34,12 @@ export const env = {
   
   // External services
   STRIPE_PUBLIC_KEY: getEnvVar('VITE_STRIPE_PUBLIC_KEY', ''),
-  MUX_ENV_KEY: getEnvVar('VITE_MUX_ENV_KEY', ''),
+  
+  // WebRTC Configuration
+  WEBRTC_ICE_SERVERS: getEnvVar('VITE_WEBRTC_ICE_SERVERS', '[{"urls":"stun:stun.l.google.com:19302"},{"urls":"stun:stun1.l.google.com:19302"}]'),
+  TURN_SERVERS: getEnvVar('VITE_TURN_SERVERS', 'relay1.expressturn.com:3480'),
+  TURN_USERNAME: getEnvVar('VITE_TURN_USERNAME', ''),
+  TURN_CREDENTIAL: getEnvVar('VITE_TURN_CREDENTIAL', ''),
   
   // PWA configuration
   ENABLE_PWA: getBoolEnvVar('VITE_ENABLE_PWA', true),

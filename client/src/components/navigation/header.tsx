@@ -5,6 +5,7 @@ import { PATHS } from "@/lib/constants";
 import { CelestialButton } from "@/components/ui/celestial-button";
 import { useAuth } from "@/hooks/use-auth";
 import { CartButton } from "@/components/shop/cart-button";
+import { ReaderNotifications } from "@/components/reader-notifications";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   DropdownMenu,
