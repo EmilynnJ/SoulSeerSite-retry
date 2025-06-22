@@ -133,12 +133,11 @@ export function setupAuth(app: Express) {
       });
       
       // Remove password from response
-      const userResponse = { ...user };
-      delete userResponse.password;
+      const { password: userPassword, ...responseUser } = user;
 
       req.login(user, (err) => {
         if (err) return next(err);
-        res.status(201).json(userResponse);
+        res.status(201).json(responseUser);
       });
     } catch (error) {
       next(error);
@@ -146,7 +145,7 @@ export function setupAuth(app: Express) {
   });
 
   app.post("/api/login", (req, res, next) => {
-    passport.authenticate("local", (err, user, info) => {
+    passport.authenticate("local", (err: Error | null, user: SelectUser | false, info: { message: string } | undefined) => {
       if (err) return next(err);
       if (!user) return res.status(401).json({ message: info?.message || "Authentication failed" });
       
@@ -154,10 +153,9 @@ export function setupAuth(app: Express) {
         if (err) return next(err);
         
         // Remove password from response
-        const userResponse = { ...user };
-        delete userResponse.password;
+        const { password: userPassword, ...responseUser } = user;
         
-        res.status(200).json(userResponse);
+        res.status(200).json(responseUser);
       });
     })(req, res, next);
   });
@@ -173,9 +171,8 @@ export function setupAuth(app: Express) {
     if (!req.isAuthenticated()) return res.sendStatus(401);
     
     // Remove password from response
-    const userResponse = { ...req.user } as SelectUser;
-    delete userResponse.password;
+    const { password: userPassword, ...responseUser } = req.user as SelectUser;
     
-    res.json(userResponse);
+    res.json(responseUser);
   });
 }
