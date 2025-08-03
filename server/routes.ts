@@ -154,6 +154,133 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ADMIN-ONLY: Create new reader profile (with image upload and Stripe onboarding)
+  import multer from "multer";
+  import path from "path";
+  import fs from "fs";
+  import { InsertUser } from "@shared/schema";
+  import { randomBytes } from "crypto";
+
+  // Set up multer storage for reader profile images
+  const readerUploads = multer({
+    storage: multer.diskStorage({
+      destination: (req, file, cb) => {
+        const dest = path.join(process.cwd(), "public", "uploads", "readers");
+        if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
+        cb(null, dest);
+      },
+      filename: (req, file, cb) => {
+        const unique = Date.now() + "-" + randomBytes(6).toString("hex");
+        const ext = path.extname(file.originalname).toLowerCase();
+        cb(null, unique + ext);
+      }
+    }),
+    fileFilter: (req, file, cb) => {
+      const allowed = /jpeg|jpg|png|webp/;
+      const ext = path.extname(file.originalname).toLowerCase();
+      if (!allowed.test(ext)) {
+        return cb(new Error("Only image files (jpeg, jpg, png, webp) are allowed!"), false);
+      }
+      cb(null, true);
+    },
+    limits: { fileSize: 5 * 1024 * 1024 } // 5 MB max
+  });
+
+  // Helper: Trigger Stripe Connect onboarding (stub for now, real logic to be added)
+  async function triggerStripeConnectOnboarding(reader: InsertUser | any) {
+    // TODO: Implement real Stripe Connect onboarding flow here
+    // For now, simulate onboarding URL
+    return { onboardingUrl: `https://dashboard.stripe.com/connect/onboarding/${reader.id}` };
+  }
+
+  /**
+   * @route POST /api/admin/readers
+   * @desc Admin-only: Create new reader profile (with file upload, validation, Stripe onboarding)
+   */
+  app.post("/api/admin/readers", readerUploads.single("profileImage"), async (req, res) => {
+    try {
+      if (!req.isAuthenticated?.() || req.user.role !== "admin") {
+        return res.status(403).json({ message: "Only admins can create reader accounts." });
+      }
+
+      // Validate fields
+      const {
+        username, email, fullName, bio, pricingChat, pricingVoice, pricingVideo, specialties, clerkUserId
+      } = req.body;
+
+      if (!username || !email || !fullName) {
+        return res.status(400).json({ message: "Missing required fields: username, email, fullName." });
+      }
+
+      // Check for duplicate username/email
+      if (await storage.getUserByUsername(username)) {
+        return res.status(400).json({ message: "Username already exists." });
+      }
+      if (await storage.getUserByEmail(email)) {
+        return res.status(400).json({ message: "Email already exists." });
+      }
+
+      // Validate profile image (if provided)
+      let profileImagePath = "";
+      if (req.file) {
+        profileImagePath = `/uploads/readers/${req.file.filename}`;
+      }
+
+      // Parse and sanitize specialties
+      let parsedSpecialties: string[] = [];
+      if (specialties) {
+        try {
+          parsedSpecialties = Array.isArray(specialties)
+            ? specialties
+            : JSON.parse(specialties);
+        } catch {
+          parsedSpecialties = (typeof specialties === "string") ? [specialties] : [];
+        }
+      }
+
+      // Parse pricing fields
+      const chat = parseInt(pricingChat, 10) || 0;
+      const voice = parseInt(pricingVoice, 10) || 0;
+      const video = parseInt(pricingVideo, 10) || 0;
+
+      // Create reader in DB
+      const reader: InsertUser = {
+        username,
+        email,
+        fullName,
+        role: "reader",
+        bio: bio || "",
+        specialties: parsedSpecialties,
+        pricing: chat,
+        pricingChat: chat,
+        pricingVoice: voice,
+        pricingVideo: video,
+        verified: true,
+        rating: 5,
+        profileImage: profileImagePath,
+        accountBalance: 0,
+        clerkUserId: clerkUserId || undefined // Optionally link to Clerk user
+      };
+
+      const created = await storage.createUser(reader);
+
+      // Stripe Connect onboarding
+      const { onboardingUrl } = await triggerStripeConnectOnboarding(created);
+
+      // Log admin action
+      // eslint-disable-next-line no-console
+      console.log(`[AUDIT] Admin ${req.user.id} created reader ${created.id} (${username})`);
+
+      // Return created reader (without password) and onboarding URL
+      const { password, ...safeReader } = created;
+      res.status(201).json({ reader: safeReader, stripeOnboarding: onboardingUrl });
+    } catch (err: any) {
+      // eslint-disable-next-line no-console
+      console.error("[ADMIN READER CREATE ERROR]", err);
+      res.status(500).json({ message: err.message || "Failed to create reader." });
+    }
+  });
+
   // Create HTTP server
   const httpServer = createServer(app);
 
