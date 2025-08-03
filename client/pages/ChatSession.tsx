@@ -25,10 +25,10 @@ export default function ChatSession() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // If session ends, redirect to summary (placeholder)
+  // If session ends, redirect to summary page
   useEffect(() => {
     if (status === "ended") {
-      setTimeout(() => navigate("/dashboard/readings?ended=" + readingId), 1500);
+      setTimeout(() => navigate(`/dashboard/readings/summary/${readingId}`), 1200);
     }
   }, [status, navigate, readingId]);
 

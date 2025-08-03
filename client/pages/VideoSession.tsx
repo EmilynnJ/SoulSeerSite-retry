@@ -69,12 +69,12 @@ export default function VideoSession() {
     }
   }, [remoteStream]);
 
-  // If session ends, redirect to summary
+  // If session ends, redirect to summary page
   useEffect(() => {
     if (status === "ended") {
       setTimeout(
         () => navigate(`/dashboard/readings/summary/${readingId}`),
-        1500
+        1200
       );
     }
   }, [status, navigate, readingId]);
