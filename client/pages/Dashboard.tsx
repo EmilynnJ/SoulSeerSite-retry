@@ -21,10 +21,80 @@ function ClientDashboard() {
   );
 }
 
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { useAuthContext } from "../auth/AuthProvider";
+import { useNavigate } from "react-router-dom";
+import apiInstance from "../src/lib/api";
+
 function ReaderDashboard() {
+  const { user } = useAuthContext();
+  const navigate = useNavigate();
+
+  // Fetch incoming reading requests
+  const { data: readings, isLoading } = useQuery({
+    queryKey: ["incomingReadings"],
+    queryFn: async () => {
+      const { data } = await apiInstance.get("/api/readings/reader");
+      return data;
+    },
+  });
+
+  const acceptMutation = useMutation({
+    mutationFn: async (readingId: number) =>
+      apiInstance.post(`/api/readings/${readingId}/accept`),
+    onSuccess: (_data, readingId) => {
+      navigate(`/readings/session/${readingId}`);
+    },
+  });
+
+  const incoming =
+    readings?.filter(
+      (r: any) =>
+        r.status === "waiting_payment" ||
+        r.status === "payment_completed"
+    ) || [];
+
   return (
     <div className="min-h-screen p-8 bg-celestial text-white">
       <h1 className="font-heading text-3xl text-pink mb-8">Reader Dashboard</h1>
+      {/* Incoming Requests */}
+      <div className="bg-black bg-opacity-70 rounded-xl p-6 mb-8">
+        <h2 className="font-heading text-xl text-gold mb-4">Incoming Requests</h2>
+        {isLoading ? (
+          <div className="text-gold">Loading...</div>
+        ) : incoming.length === 0 ? (
+          <div className="text-gold">No incoming requests right now.</div>
+        ) : (
+          <table className="w-full text-white font-body">
+            <thead>
+              <tr>
+                <th>Client</th>
+                <th>Type</th>
+                <th>Status</th>
+                <th>Accept</th>
+              </tr>
+            </thead>
+            <tbody>
+              {incoming.map((r: any) => (
+                <tr key={r.id}>
+                  <td>{r.clientId}</td>
+                  <td>{r.type}</td>
+                  <td>{r.status}</td>
+                  <td>
+                    <button
+                      className="bg-pink text-white px-4 py-1 rounded-full font-bold shadow-glow hover:bg-gold hover:text-black transition"
+                      disabled={acceptMutation.isPending}
+                      onClick={() => acceptMutation.mutate(r.id)}
+                    >
+                      Accept
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
       {/* Status toggle, earnings, session history, analytics */}
       <div className="grid md:grid-cols-2 gap-8">
         <div className="bg-black bg-opacity-70 rounded-xl p-6">

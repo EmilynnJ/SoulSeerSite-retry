@@ -6,6 +6,7 @@ import HomePage from "./pages/HomePage";
 import AboutPage from "./pages/AboutPage";
 import Dashboard from "./pages/Dashboard";
 import Readings from "./pages/Readings";
+import ReaderProfile from "./pages/ReaderProfile";
 import Live from "./pages/Live";
 import Shop from "./pages/Shop";
 import Community from "./pages/Community";
@@ -19,7 +20,11 @@ import NavBar from "./components/NavBar";
 import Footer from "./components/Footer";
 import SignInPage from "./pages/SignInPage";
 import SignUpPage from "./pages/SignUpPage";
+import SessionWait from "./pages/SessionWait";
 import "./theme.css";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { queryClient } from "./src/lib/queryClient";
+import { BrowserRouter as Router, Routes, Route, Outlet } from "react-router-dom";
 
 function Layout() {
   return (
@@ -43,7 +48,9 @@ function App() {
               <Route path="/" element={<HomePage />} />
               <Route path="/about" element={<AboutPage />} />
               <Route path="/dashboard/*" element={<Dashboard />} />
-              <Route path="/readings/*" element={<Readings />} />
+              <Route path="/readings" element={<Readings />} />
+              <Route path="/readings/:readerId" element={<ReaderProfile />} />
+              <Route path="/readings/session/:readingId" element={<SessionWait />} />
               <Route path="/live/*" element={<Live />} />
               <Route path="/shop/*" element={<Shop />} />
               <Route path="/community/*" element={<Community />} />
