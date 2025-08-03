@@ -17,6 +17,7 @@ export interface IStorage {
   getUser(id: number): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
   getUserByEmail(email: string): Promise<User | undefined>;
+  getUserByClerkId(clerkUserId: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
   updateUser(id: number, user: UserUpdate): Promise<User | undefined>;
   getReaders(): Promise<User[]>;
@@ -153,12 +154,26 @@ export class MemStorage implements IStorage {
     );
   }
 
+  async getUserByClerkId(clerkUserId: string): Promise<User | undefined> {
+    return Array.from(this.users.values()).find(
+      (user) => user.clerkUserId === clerkUserId
+    );
+  }
+
   async createUser(insertUser: InsertUser): Promise<User> {
     const id = this.currentUserId++;
     const now = new Date();
+    // If password not supplied, generate a random 32-char string to satisfy NOT NULL constraint
+    let password = insertUser.password;
+    if (!password) {
+      password = Array.from({ length: 32 }, () =>
+        Math.floor(Math.random() * 36).toString(36)
+      ).join("");
+    }
     const user: User = { 
       ...insertUser, 
       id, 
+      password,
       createdAt: now, 
       lastActive: now, 
       isOnline: false,
@@ -617,10 +632,23 @@ export class DatabaseStorage implements IStorage {
     return user;
   }
 
+  async getUserByClerkId(clerkUserId: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.clerkUserId, clerkUserId));
+    return user;
+  }
+
   async createUser(user: InsertUser): Promise<User> {
     const now = new Date();
+    // If password not supplied, generate a random 32-char string to satisfy NOT NULL constraint
+    let password = user.password;
+    if (!password) {
+      password = Array.from({ length: 32 }, () =>
+        Math.floor(Math.random() * 36).toString(36)
+      ).join("");
+    }
     const [createdUser] = await db.insert(users).values({
       ...user,
+      password,
       createdAt: now,
       lastActive: now,
       isOnline: false,

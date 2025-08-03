@@ -2,7 +2,7 @@ import express, { type Express, Request, Response, NextFunction } from "express"
 import { createServer, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage.js";
-import { setupAuth } from "./auth.js";
+import { setupClerkAuth } from "./clerkAuth.js";
 import { z } from "zod";
 import { UserUpdate, Reading } from "@shared/schema";
 import { db } from "./db";
@@ -131,8 +131,8 @@ async function processCompletedReadingPayment(
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  // Setup authentication routes
-  setupAuth(app);
+  // Setup Clerk authentication middleware
+  setupClerkAuth(app);
   
   // Create HTTP server
   const httpServer = createServer(app);

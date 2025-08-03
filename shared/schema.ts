@@ -26,6 +26,7 @@ export const users = pgTable("users", {
   // No longer using Square - only Stripe
   // stripeCustomerId field already exists
   stripeCustomerId: text("stripe_customer_id"), // Stripe customer ID for payment processing
+  clerkUserId: text("clerk_user_id").unique(), // Clerk user ID (optional, unique)
 });
 
 export const messages = pgTable("messages", {
@@ -157,7 +158,11 @@ export const gifts = pgTable("gifts", {
 // Insert Schemas
 
 export const insertUserSchema = createInsertSchema(users)
-  .omit({ id: true, createdAt: true, lastActive: true, isOnline: true, reviewCount: true });
+  .omit({ id: true, createdAt: true, lastActive: true, isOnline: true, reviewCount: true })
+  .extend({
+    password: z.string().optional(), // Make password optional for Clerk-imported users
+    clerkUserId: z.string().optional()
+  });
 
 export const insertReadingSchema = createInsertSchema(readings)
   .omit({ 
@@ -225,6 +230,7 @@ export type UserUpdate = Partial<InsertUser> & {
   stripeCustomerId?: string;
   accountBalance?: number;
   reviewCount?: number;
+  clerkUserId?: string;
 };
 
 export type InsertReading = z.infer<typeof insertReadingSchema>;
