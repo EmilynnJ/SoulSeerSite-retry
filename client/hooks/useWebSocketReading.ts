@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useAuthContext } from "../auth/AuthProvider";
 import toast from "react-hot-toast";
+import { queryClient } from "../src/lib/queryClient";
 
 type Message = {
   text: string;
@@ -8,14 +9,17 @@ type Message = {
   timestamp: number;
 };
 
-export default function useWebSocketReading(readingId: number) {
+export default function useWebSocketReading(
+  readingId: number,
+  opts?: { noChat?: boolean }
+) {
   const { user } = useAuthContext();
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [minutes, setMinutes] = useState(0);
   const [cost, setCost] = useState(0);
   const [balance, setBalance] = useState(0);
-  const [status, setStatus] = useState<"waiting"|"active"|"ended">("waiting");
+  const [status, setStatus] = useState<"waiting" | "active" | "ended">("waiting");
   const [readerName, setReaderName] = useState<string>("Psychic");
   const [rate, setRate] = useState<number>(100);
   const wsRef = useRef<WebSocket | null>(null);
@@ -37,7 +41,7 @@ export default function useWebSocketReading(readingId: number) {
           const data = JSON.parse(event.data);
           switch (data.type) {
             case "session_ready":
-              if (data.mode === "chat") {
+              if (["chat", "voice", "video"].includes(data.mode)) {
                 setStatus("active");
                 setReaderName(data.readerName || "Psychic");
                 setRate(Number(data.pricePerMinute || 100));
@@ -45,27 +49,33 @@ export default function useWebSocketReading(readingId: number) {
               }
               break;
             case "reading_chat_message":
-              setMessages((msgs) =>
-                [
-                  ...msgs,
-                  {
-                    text: data.message,
-                    mine: data.senderId === user?.id,
-                    timestamp: data.timestamp,
-                  },
-                ].slice(-100)
-              );
+              if (!opts?.noChat) {
+                setMessages((msgs) =>
+                  [
+                    ...msgs,
+                    {
+                      text: data.message,
+                      mine: data.senderId === user?.id,
+                      timestamp: data.timestamp,
+                    },
+                  ].slice(-100)
+                );
+              }
               break;
             case "minute_billed":
               setMinutes(data.minutes || 0);
               setCost(data.minutes * (data.pricePerMinute || rate || 100));
               toast(
-                `Minute billed: ${data.minutes} (${((data.minutes * (data.pricePerMinute || rate || 100))/100).toFixed(2)} USD)`,
+                `Minute billed: ${data.minutes} (${(
+                  (data.minutes * (data.pricePerMinute || rate || 100)) /
+                  100
+                ).toFixed(2)} USD)`,
                 { icon: "⏳" }
               );
               break;
             case "ACCOUNT_BALANCE_UPDATED":
               setBalance(data.newBalance || 0);
+              queryClient.invalidateQueries(["balance"]); // Invalidate balance query
               break;
             case "session_end":
               setStatus("ended");
@@ -102,7 +112,7 @@ export default function useWebSocketReading(readingId: number) {
       wsRef.current = null;
     };
     // eslint-disable-next-line
-  }, [readingId, user?.id]);
+  }, [readingId, user?.id, opts?.noChat]);
 
   const sendMessage = (text: string) => {
     wsRef.current?.send(
