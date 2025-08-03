@@ -43,7 +43,7 @@ function ReaderDashboard() {
     mutationFn: async (readingId: number) =>
       apiInstance.post(`/api/readings/${readingId}/accept`),
     onSuccess: (_data, readingId) => {
-      navigate(`/readings/session/${readingId}`);
+      navigate(`/readings/session/${readingId}/chat`);
     },
   });
 

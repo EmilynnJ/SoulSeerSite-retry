@@ -21,6 +21,8 @@ import Footer from "./components/Footer";
 import SignInPage from "./pages/SignInPage";
 import SignUpPage from "./pages/SignUpPage";
 import SessionWait from "./pages/SessionWait";
+import ChatSession from "./pages/ChatSession";
+import { Toaster } from "react-hot-toast";
 import "./theme.css";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "./src/lib/queryClient";
@@ -29,6 +31,7 @@ import { BrowserRouter as Router, Routes, Route, Outlet } from "react-router-dom
 function Layout() {
   return (
     <div className="flex flex-col min-h-screen">
+      <Toaster position="top-center" />
       <NavBar />
       <main className="flex-1 flex flex-col">
         <Outlet />
@@ -51,6 +54,7 @@ function App() {
               <Route path="/readings" element={<Readings />} />
               <Route path="/readings/:readerId" element={<ReaderProfile />} />
               <Route path="/readings/session/:readingId" element={<SessionWait />} />
+              <Route path="/readings/session/:readingId/chat" element={<ChatSession />} />
               <Route path="/live/*" element={<Live />} />
               <Route path="/shop/*" element={<Shop />} />
               <Route path="/community/*" element={<Community />} />
