@@ -2,6 +2,7 @@ import { Express, Request, Response, NextFunction } from "express";
 import { clerkMiddleware, getAuth } from "@clerk/express";
 import { storage } from "./storage.js";
 import { User, InsertUser } from "@shared/schema";
+import { Clerk } from "@clerk/clerk-sdk-node";
 
 // Extend Express Request for TS
 declare global {
@@ -13,15 +14,67 @@ declare global {
   }
 }
 
-// Minimal Clerk user info fetch fallback
-async function fetchClerkUser(clerkUserId: string): Promise<{ email?: string; username?: string; fullName?: string }> {
-  // Ideally, use Clerk SDK; fallback to generic structure for now.
-  // (In real use, import Clerk SDK and call clerkClient.users.getUser(clerkUserId))
-  return {
-    email: `clerk_${clerkUserId}@noemail.com`,
-    username: `clerkuser_${clerkUserId}`,
-    fullName: `Clerk User`
-  };
+/**
+ * Fetches Clerk user profile using the official Clerk SDK for production.
+ * Throws if not found or on error.
+ */
+async function fetchClerkUser(clerkUserId: string) {
+  // Ensure we have the Clerk secret key in env
+  if (!process.env.CLERK_SECRET_KEY) {
+    throw new Error("Missing CLERK_SECRET_KEY env variable required for Clerk integration.");
+  }
+  // Initialize Clerk client (singleton pattern if needed)
+  const clerkClient = Clerk({
+    secretKey: process.env.CLERK_SECRET_KEY
+  });
+
+  try {
+    const clerkUser = await clerkClient.users.getUser(clerkUserId);
+    if (!clerkUser) throw new Error("Clerk user not found");
+
+    // Use Clerk's username or generate one if unavailable
+    let username = clerkUser.username;
+    if (!username) {
+      if (clerkUser.emailAddresses && clerkUser.emailAddresses.length > 0) {
+        // use local part of email
+        username = clerkUser.emailAddresses[0].emailAddress.split("@")[0];
+      } else {
+        username = `clerkuser_${clerkUserId}`;
+      }
+    }
+
+    // Get primary email
+    let email = "";
+    if (clerkUser.primaryEmailAddressId) {
+      const primary = clerkUser.emailAddresses.find(
+        (e) => e.id === clerkUser.primaryEmailAddressId
+      );
+      email = primary?.emailAddress || "";
+    }
+    if (!email && clerkUser.emailAddresses?.length) {
+      email = clerkUser.emailAddresses[0].emailAddress;
+    }
+    if (!email) {
+      email = `clerk_${clerkUserId}@noemail.com`;
+    }
+
+    // Get full name
+    let fullName = clerkUser.firstName && clerkUser.lastName
+      ? `${clerkUser.firstName} ${clerkUser.lastName}`
+      : clerkUser.firstName || clerkUser.lastName || username;
+
+    // Get profile image if available
+    let profileImage = (clerkUser.imageUrl && typeof clerkUser.imageUrl === "string") ? clerkUser.imageUrl : "";
+
+    return {
+      email,
+      username,
+      fullName,
+      profileImage
+    };
+  } catch (err) {
+    throw new Error("Failed to fetch Clerk user: " + (err as any)?.message);
+  }
 }
 
 export function setupClerkAuth(app: Express) {
@@ -42,9 +95,10 @@ export function setupClerkAuth(app: Express) {
       if (!user) {
         // No match - fetch from Clerk and create user in DB as 'client'
         const clerkData = await fetchClerkUser(userId);
-        const email = clerkData.email || `clerk_${userId}@noemail.com`;
-        const username = clerkData.username || `clerkuser_${userId}`;
-        const fullName = clerkData.fullName || username;
+        const email = clerkData.email;
+        const username = clerkData.username;
+        const fullName = clerkData.fullName;
+        const profileImage = clerkData.profileImage;
 
         user = await storage.createUser({
           username,
@@ -56,7 +110,7 @@ export function setupClerkAuth(app: Express) {
           pricing: null,
           rating: null,
           verified: false,
-          profileImage: "",
+          profileImage,
           clerkUserId: userId
         } as InsertUser);
       }
@@ -66,7 +120,8 @@ export function setupClerkAuth(app: Express) {
     } catch (err) {
       req.isAuthenticated = () => false;
       req.user = undefined;
-      // Optionally log error
+      // Log error for production monitoring
+      console.error("Clerk authentication error:", err);
     }
     next();
   });
