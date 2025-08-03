@@ -186,11 +186,59 @@ export async function registerRoutes(app: Express): Promise<Server> {
     limits: { fileSize: 5 * 1024 * 1024 } // 5 MB max
   });
 
-  // Helper: Trigger Stripe Connect onboarding (stub for now, real logic to be added)
-  async function triggerStripeConnectOnboarding(reader: InsertUser | any) {
-    // TODO: Implement real Stripe Connect onboarding flow here
-    // For now, simulate onboarding URL
-    return { onboardingUrl: `https://dashboard.stripe.com/connect/onboarding/${reader.id}` };
+  // Real Stripe Connect onboarding
+  import Stripe from "stripe";
+  import { STRIPE_SECRET_KEY } from "./env.js";
+
+  const stripe = new Stripe(STRIPE_SECRET_KEY, { apiVersion: "2024-04-10" });
+
+  async function triggerStripeConnectOnboarding(reader: any) {
+    // 1. Create a Stripe Connect account for the reader
+    let account;
+    try {
+      account = await stripe.accounts.create({
+        type: "express",
+        email: reader.email,
+        business_type: "individual",
+        individual: {
+          first_name: reader.fullName.split(" ")[0],
+          last_name: reader.fullName.split(" ").slice(1).join(" ") || reader.fullName.split(" ")[0],
+          email: reader.email,
+        },
+        capabilities: {
+          transfers: { requested: true },
+          card_payments: { requested: true },
+        },
+        metadata: {
+          userId: reader.id,
+          username: reader.username,
+        }
+      });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("[STRIPE CONNECT ERROR]", err);
+      throw new Error("Failed to create Stripe Connect account.");
+    }
+
+    // 2. Save the Stripe Connect account ID to the user in DB
+    await storage.updateUser(reader.id, { stripeAccountId: account.id });
+
+    // 3. Generate the onboarding link for the reader to complete their onboarding
+    let onboardingLink: Stripe.AccountLink;
+    try {
+      onboardingLink = await stripe.accountLinks.create({
+        account: account.id,
+        refresh_url: `${process.env.FRONTEND_URL || "https://soulseer.app"}/dashboard/reader/onboarding?refresh=1`,
+        return_url: `${process.env.FRONTEND_URL || "https://soulseer.app"}/dashboard/reader/onboarding?return=1`,
+        type: "account_onboarding",
+      });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("[STRIPE CONNECT LINK ERROR]", err);
+      throw new Error("Failed to generate Stripe Connect onboarding link.");
+    }
+
+    return { onboardingUrl: onboardingLink.url, stripeAccountId: account.id };
   }
 
   /**
@@ -264,15 +312,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const created = await storage.createUser(reader);
 
-      // Stripe Connect onboarding
-      const { onboardingUrl } = await triggerStripeConnectOnboarding(created);
+      // Stripe Connect onboarding (real production logic)
+      const { onboardingUrl, stripeAccountId } = await triggerStripeConnectOnboarding(created);
+
+      // Fetch updated user w/ Stripe account ID
+      const updated = await storage.getUser(created.id);
 
       // Log admin action
       // eslint-disable-next-line no-console
-      console.log(`[AUDIT] Admin ${req.user.id} created reader ${created.id} (${username})`);
+      console.log(`[AUDIT] Admin ${req.user.id} created reader ${created.id} (${username}) w/ StripeAccount: ${stripeAccountId}`);
 
       // Return created reader (without password) and onboarding URL
-      const { password, ...safeReader } = created;
+      const { password, ...safeReader } = updated || created;
       res.status(201).json({ reader: safeReader, stripeOnboarding: onboardingUrl });
     } catch (err: any) {
       // eslint-disable-next-line no-console
