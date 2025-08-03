@@ -1,5 +1,6 @@
 import React from "react";
 import { Navigate } from "react-router-dom";
+import { SignedIn, SignedOut, useAuth } from "@clerk/clerk-react";
 import { useAuthContext } from "../auth/AuthProvider";
 import Loading from "./Loading";
 
@@ -10,10 +11,22 @@ export default function ProtectedRoute({
   children: React.ReactNode;
   requiredRole?: "client" | "reader" | "admin";
 }) {
-  const { isAuthenticated, loading, role } = useAuthContext();
+  const { isLoaded, isSignedIn } = useAuth();
+  const { loading, role } = useAuthContext();
 
-  if (loading) return <Loading />;
-  if (!isAuthenticated) return <Navigate to="/" replace />;
-  if (requiredRole && role !== requiredRole) return <Navigate to="/dashboard" replace />;
-  return <>{children}</>;
+  if (loading || !isLoaded) return <Loading />;
+  return (
+    <>
+      <SignedIn>
+        {requiredRole && role !== requiredRole ? (
+          <Navigate to="/dashboard" replace />
+        ) : (
+          <>{children}</>
+        )}
+      </SignedIn>
+      <SignedOut>
+        <Navigate to="/signin" replace />
+      </SignedOut>
+    </>
+  );
 }

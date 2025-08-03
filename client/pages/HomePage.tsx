@@ -1,10 +1,21 @@
 import React from "react";
 import { Link } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
+import apiInstance from "../src/lib/api";
 
 const HERO_IMG = "https://i.postimg.cc/tRLSgCPb/HERO-IMAGE-1.jpg";
 const BG_IMG = "https://i.postimg.cc/sXdsKGTK/DALL-E-2025-06-06-14-36-29-A-vivid-ethereal-background-image-designed-for-a-psychic-reading-app.webp";
 
 export default function HomePage() {
+  // Fetch online readers
+  const { data: readers, isLoading } = useQuery({
+    queryKey: ["onlineReaders"],
+    queryFn: async () => {
+      const { data } = await apiInstance.get("/api/readers/online");
+      return data;
+    },
+  });
+
   return (
     <div className="min-h-screen bg-celestial flex flex-col">
       {/* Background Cosmic Overlay */}
@@ -48,21 +59,34 @@ export default function HomePage() {
         {/* Online Readers Preview */}
         <section className="w-full max-w-5xl mt-8 p-6 bg-black bg-opacity-60 rounded-xl shadow-xl animate-fade-in">
           <h3 className="font-heading text-2xl text-pink mb-4">Currently Online Readers</h3>
-          {/* TODO: Map online readers from backend */}
           <div className="flex gap-6 flex-wrap justify-center">
-            {/* Reader Card Example */}
-            <div className="bg-celestial border-2 border-pink rounded-lg p-4 w-56 flex flex-col items-center">
-              <img
-                src="https://i.postimg.cc/s2ds9RtC/FOUNDER.jpg"
-                alt="Reader"
-                className="w-24 h-24 rounded-full border-4 border-gold shadow-lg mb-2"
-              />
-              <div className="font-bold text-lg text-white">Emilynn</div>
-              <div className="text-gold font-body">Love & Mediumship</div>
-              <button className="mt-3 px-5 py-2 bg-pink text-white rounded-full font-bold hover:bg-gold hover:text-black transition">
-                Start Chat
-              </button>
-            </div>
+            {isLoading ? (
+              <div className="text-gold font-body text-lg">Loading readers...</div>
+            ) : readers && readers.length > 0 ? (
+              readers.map((reader: any) => (
+                <Link
+                  to={`/readings/${reader.id}`}
+                  key={reader.id}
+                  className="bg-celestial border-2 border-pink rounded-lg p-4 w-56 flex flex-col items-center hover:shadow-glow transition"
+                >
+                  <img
+                    src={reader.profileImage || "https://i.postimg.cc/s2ds9RtC/FOUNDER.jpg"}
+                    alt={reader.fullName}
+                    className="w-24 h-24 rounded-full border-4 border-gold shadow-lg mb-2"
+                  />
+                  <div className="font-bold text-lg text-white">{reader.fullName}</div>
+                  <div className="text-gold font-body">{reader.specialties?.join(", ") || "Psychic Readings"}</div>
+                  <div className="mt-2 text-white font-body text-sm">
+                    <span className="text-pink font-bold">${(reader.pricingChat ?? reader.pricing ?? 100) / 100}/min</span> Chat
+                  </div>
+                  <button className="mt-3 px-5 py-2 bg-pink text-white rounded-full font-bold hover:bg-gold hover:text-black transition">
+                    View Profile
+                  </button>
+                </Link>
+              ))
+            ) : (
+              <div className="text-gold font-body text-lg">No readers are online at the moment. Please check back soon!</div>
+            )}
           </div>
         </section>
         {/* Announcements/Promos */}
@@ -81,10 +105,6 @@ export default function HomePage() {
           </ul>
         </section>
       </main>
-      {/* Footer */}
-      <footer className="relative z-10 bg-black bg-opacity-70 text-center text-white font-body py-6 mt-12">
-        &copy; {new Date().getFullYear()} SoulSeer. All rights reserved.
-      </footer>
     </div>
   );
 }
