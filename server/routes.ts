@@ -133,7 +133,27 @@ async function processCompletedReadingPayment(
 export async function registerRoutes(app: Express): Promise<Server> {
   // Setup Clerk authentication middleware
   setupClerkAuth(app);
-  
+
+  // Health check endpoint for devops/monitoring
+  app.get("/api/health", async (req, res) => {
+    try {
+      // Test DB
+      await storage.getAllUsers();
+
+      // Test Clerk
+      const { CLERK_SECRET_KEY, VITE_CLERK_PUBLISHABLE_KEY, VITE_CLERK_FRONTEND_API_URL } = await import("./env.js");
+      if (!CLERK_SECRET_KEY || !VITE_CLERK_PUBLISHABLE_KEY || !VITE_CLERK_FRONTEND_API_URL) throw new Error("Clerk env missing");
+
+      // Test Stripe
+      const { STRIPE_SECRET_KEY } = await import("./env.js");
+      if (!STRIPE_SECRET_KEY) throw new Error("Stripe env missing");
+
+      res.json({ ok: true, timestamp: Date.now() });
+    } catch (err) {
+      res.status(500).json({ ok: false, error: (err as any).message || "Health check failed" });
+    }
+  });
+
   // Create HTTP server
   const httpServer = createServer(app);
 

@@ -3,6 +3,7 @@ import { clerkMiddleware, getAuth } from "@clerk/express";
 import { storage } from "./storage.js";
 import { User, InsertUser } from "@shared/schema";
 import { Clerk } from "@clerk/clerk-sdk-node";
+import { CLERK_SECRET_KEY } from "./env.js";
 
 // Extend Express Request for TS
 declare global {
@@ -17,17 +18,11 @@ declare global {
 /**
  * Fetches Clerk user profile using the official Clerk SDK for production.
  * Throws if not found or on error.
+ * Uses singleton Clerk client for efficiency.
  */
-async function fetchClerkUser(clerkUserId: string) {
-  // Ensure we have the Clerk secret key in env
-  if (!process.env.CLERK_SECRET_KEY) {
-    throw new Error("Missing CLERK_SECRET_KEY env variable required for Clerk integration.");
-  }
-  // Initialize Clerk client (singleton pattern if needed)
-  const clerkClient = Clerk({
-    secretKey: process.env.CLERK_SECRET_KEY
-  });
+const clerkClient = Clerk({ secretKey: CLERK_SECRET_KEY });
 
+async function fetchClerkUser(clerkUserId: string) {
   try {
     const clerkUser = await clerkClient.users.getUser(clerkUserId);
     if (!clerkUser) throw new Error("Clerk user not found");
@@ -73,6 +68,9 @@ async function fetchClerkUser(clerkUserId: string) {
       profileImage
     };
   } catch (err) {
+    // Log Clerk errors for security audits, but do not leak details to client
+    // eslint-disable-next-line no-console
+    console.error(`[CLERK ERROR] Failed to fetch Clerk user ${clerkUserId}:`, err);
     throw new Error("Failed to fetch Clerk user: " + (err as any)?.message);
   }
 }
@@ -113,6 +111,10 @@ export function setupClerkAuth(app: Express) {
           profileImage,
           clerkUserId: userId
         } as InsertUser);
+
+        // Log new Clerk user auto-creation
+        // eslint-disable-next-line no-console
+        console.log(`[AUTH] Clerk user ${userId} auto-created as client: ${username} <${email}>`);
       }
 
       req.user = user;
@@ -120,7 +122,8 @@ export function setupClerkAuth(app: Express) {
     } catch (err) {
       req.isAuthenticated = () => false;
       req.user = undefined;
-      // Log error for production monitoring
+      // Log error for production monitoring, but don't leak to client
+      // eslint-disable-next-line no-console
       console.error("Clerk authentication error:", err);
     }
     next();
