@@ -7,11 +7,24 @@ export default function SessionWait() {
   const navigate = useNavigate();
   const { status, isLoading } = useReadingStatus(Number(readingId));
 
+  const [type, setType] = React.useState<"chat" | "voice" | "video">("chat");
+  // Fetch reading for type
+  useEffect(() => {
+    if (readingId) {
+      apiInstance
+        .get(`/api/readings/${readingId}`)
+        .then((res) => setType(res.data.type));
+    }
+  }, [readingId]);
   useEffect(() => {
     if (status === "in_progress") {
-      navigate(`/readings/session/${readingId}/chat`, { replace: true });
+      if (type === "chat") {
+        navigate(`/readings/session/${readingId}/chat`, { replace: true });
+      } else {
+        navigate(`/readings/session/${readingId}/video`, { replace: true });
+      }
     }
-  }, [status, navigate, readingId]);
+  }, [status, navigate, readingId, type]);
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-celestial">

@@ -55,6 +55,7 @@ function App() {
               <Route path="/readings/:readerId" element={<ReaderProfile />} />
               <Route path="/readings/session/:readingId" element={<SessionWait />} />
               <Route path="/readings/session/:readingId/chat" element={<ChatSession />} />
+              <Route path="/readings/session/:readingId/video" element={<VideoSession />} />
               <Route path="/live/*" element={<Live />} />
               <Route path="/shop/*" element={<Shop />} />
               <Route path="/community/*" element={<Community />} />

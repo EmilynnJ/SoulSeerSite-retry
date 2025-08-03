@@ -104,13 +104,45 @@ export default function ReaderProfile() {
           </div>
           <SignedIn>
             {reader.isOnline ? (
-              <button
-                className="bg-pink text-white px-8 py-3 rounded-full font-bold shadow-glow hover:bg-gold hover:text-black transition"
-                disabled={startChatMutation.isPending}
-                onClick={() => startChatMutation.mutate()}
-              >
-                {startChatMutation.isPending ? "Starting..." : "Start Chat"}
-              </button>
+              <div className="flex gap-4">
+                <button
+                  className="bg-pink text-white px-8 py-3 rounded-full font-bold shadow-glow hover:bg-gold hover:text-black transition"
+                  disabled={startChatMutation.isPending}
+                  onClick={() => startChatMutation.mutate()}
+                >
+                  {startChatMutation.isPending ? "Starting..." : "Start Chat"}
+                </button>
+                <button
+                  className="bg-pink text-white px-8 py-3 rounded-full font-bold shadow-glow hover:bg-gold hover:text-black transition"
+                  onClick={async () => {
+                    const { data } = await apiInstance.post("/api/readings/on-demand", {
+                      readerId: reader.id,
+                      type: "voice",
+                    });
+                    if (data && data.paymentLink) {
+                      window.open(data.paymentLink, "_blank", "noopener noreferrer");
+                      navigate(`/dashboard/readings?pending=${data.reading?.id || ""}`);
+                    }
+                  }}
+                >
+                  Start Voice
+                </button>
+                <button
+                  className="bg-pink text-white px-8 py-3 rounded-full font-bold shadow-glow hover:bg-gold hover:text-black transition"
+                  onClick={async () => {
+                    const { data } = await apiInstance.post("/api/readings/on-demand", {
+                      readerId: reader.id,
+                      type: "video",
+                    });
+                    if (data && data.paymentLink) {
+                      window.open(data.paymentLink, "_blank", "noopener noreferrer");
+                      navigate(`/dashboard/readings?pending=${data.reading?.id || ""}`);
+                    }
+                  }}
+                >
+                  Start Video
+                </button>
+              </div>
             ) : (
               <button
                 className="bg-gray-400 text-white px-8 py-3 rounded-full font-bold cursor-not-allowed"

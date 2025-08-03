@@ -40,10 +40,13 @@ function ReaderDashboard() {
   });
 
   const acceptMutation = useMutation({
-    mutationFn: async (readingId: number) =>
-      apiInstance.post(`/api/readings/${readingId}/accept`),
-    onSuccess: (_data, readingId) => {
-      navigate(`/readings/session/${readingId}/chat`);
+    mutationFn: async (reading: any) => apiInstance.post(`/api/readings/${reading.id}/accept`),
+    onSuccess: (_data, reading) => {
+      if (reading.type === "chat") {
+        navigate(`/readings/session/${reading.id}/chat`);
+      } else {
+        navigate(`/readings/session/${reading.id}/video`);
+      }
     },
   });
 
@@ -84,7 +87,7 @@ function ReaderDashboard() {
                     <button
                       className="bg-pink text-white px-4 py-1 rounded-full font-bold shadow-glow hover:bg-gold hover:text-black transition"
                       disabled={acceptMutation.isPending}
-                      onClick={() => acceptMutation.mutate(r.id)}
+                      onClick={() => acceptMutation.mutate(r)}
                     >
                       Accept
                     </button>
