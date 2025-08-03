@@ -406,7 +406,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Track all connected WebSocket clients
   const connectedClients = new Map();
   let clientIdCounter = 1;
-  
+
+  // Track active reading sessions: { [readingId]: { ...sessionState } }
+  const activeReadingSessions: Record<
+    string,
+    {
+      readingId: number,
+      clientId: number,
+      readerId: number,
+      type: "chat" | "voice" | "video",
+      pricePerMinute: number,
+      startedAt: Date,
+      lastActive: Date,
+      billedMinutes: number,
+      chatTranscript: { senderId: number; message: string; timestamp: number }[],
+      timer: NodeJS.Timeout | null,
+      participants: Set<number>,
+      graceTimeout: NodeJS.Timeout | null,
+      disconnectedAt: Date | null,
+      status: "active" | "grace" | "ended"
+    }
+  > = {};
+
   // Broadcast a message to all connected clients
   const broadcastToAll = (message: any) => {
     const messageStr = typeof message === 'string' ? message : JSON.stringify(message);
@@ -440,6 +461,297 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
     });
   };
+
+  // Secure and robust WebRTC signaling/session management
+  wss.on("connection", (ws, req) => {
+    const clientId = clientIdCounter++;
+    let userId: number | null = null;
+
+    connectedClients.set(clientId, { socket: ws, userId });
+
+    ws.on("message", async (raw) => {
+      let data: any;
+      try {
+        data = JSON.parse(raw.toString());
+      } catch (err) {
+        ws.send(JSON.stringify({ type: "error", message: "Malformed message." }));
+        return;
+      }
+
+      if (data.type === "authenticate" && data.userId) {
+        userId = data.userId;
+        connectedClients.set(clientId, { socket: ws, userId });
+        ws.send(JSON.stringify({ type: "authentication_success", userId }));
+        return;
+      }
+
+      // --- WebRTC Session Init/Join ---
+      if (["initiate_reading", "join_reading"].includes(data.type)) {
+        // Validate user and reading
+        if (!userId) return ws.send(JSON.stringify({ type: "error", message: "Must authenticate first." }));
+
+        const readingId = data.readingId;
+        const reading = await storage.getReading(readingId);
+        if (!reading) return ws.send(JSON.stringify({ type: "error", message: "Invalid reading." }));
+
+        // Only allow client or reader to join their own reading
+        if (![reading.clientId, reading.readerId].includes(userId)) {
+          return ws.send(JSON.stringify({ type: "error", message: "Not authorized for this reading." }));
+        }
+
+        // Initialize session if needed
+        if (!activeReadingSessions[readingId]) {
+          activeReadingSessions[readingId] = {
+            readingId,
+            clientId: reading.clientId,
+            readerId: reading.readerId,
+            type: reading.type,
+            pricePerMinute: reading.pricePerMinute,
+            startedAt: new Date(),
+            lastActive: new Date(),
+            billedMinutes: 0,
+            chatTranscript: [],
+            timer: null,
+            participants: new Set(),
+            graceTimeout: null,
+            disconnectedAt: null,
+            status: "active",
+          };
+        }
+
+        // Add participant
+        activeReadingSessions[readingId].participants.add(userId);
+        activeReadingSessions[readingId].lastActive = new Date();
+
+        // If both participants are present, start minute billing
+        if (
+          activeReadingSessions[readingId].participants.has(reading.clientId) &&
+          activeReadingSessions[readingId].participants.has(reading.readerId) &&
+          !activeReadingSessions[readingId].timer
+        ) {
+          // Start minute billing
+          activeReadingSessions[readingId].timer = setInterval(async () => {
+            try {
+              const session = activeReadingSessions[readingId];
+              if (!session || session.status !== "active") return;
+              session.billedMinutes++;
+              // Deduct from client, credit reader (real-time production logic)
+              const client = await storage.getUser(session.clientId);
+              const reader = await storage.getUser(session.readerId);
+              if (!client || !reader) throw new Error("User not found for billing.");
+              if ((client.accountBalance ?? 0) < session.pricePerMinute) {
+                // End session for insufficient balance
+                ws.send(
+                  JSON.stringify({ type: "session_end", reason: "insufficient_balance" })
+                );
+                clearInterval(session.timer!);
+                session.status = "ended";
+                await storage.updateReading(session.readingId, {
+                  status: "completed",
+                  duration: session.billedMinutes,
+                  totalPrice: session.billedMinutes * session.pricePerMinute,
+                  completedAt: new Date(),
+                });
+                return;
+              }
+              await storage.updateUser(client.id, {
+                accountBalance: (client.accountBalance ?? 0) - session.pricePerMinute,
+              });
+              await storage.updateUser(reader.id, {
+                accountBalance: (reader.accountBalance ?? 0) + Math.floor(session.pricePerMinute * 0.7),
+              });
+              // Send minute update to both
+              notifyUser(session.clientId, { type: "minute_billed", minutes: session.billedMinutes });
+              notifyUser(session.readerId, { type: "minute_billed", minutes: session.billedMinutes });
+            } catch (err) {
+              // eslint-disable-next-line no-console
+              console.error("[BILLING ERROR]", err);
+            }
+          }, 60 * 1000);
+        }
+
+        // Notify both users that session is ready
+        notifyUser(reading.clientId, { type: "session_ready", readingId, mode: reading.type });
+        notifyUser(reading.readerId, { type: "session_ready", readingId, mode: reading.type });
+        return;
+      }
+
+      // --- WebRTC Signal Events (offer/answer/ice) ---
+      if (["signal_offer", "signal_answer", "signal_ice"].includes(data.type)) {
+        // Validate session and forward to the other participant
+        const { readingId, recipientId, payload } = data;
+        if (!readingId || !recipientId) return;
+        if (
+          !activeReadingSessions[readingId] ||
+          !activeReadingSessions[readingId].participants.has(userId)
+        )
+          return;
+        notifyUser(recipientId, {
+          type: data.type,
+          readingId,
+          senderId: userId,
+          payload,
+        });
+        return;
+      }
+
+      // --- Chat messages within session ---
+      if (data.type === "reading_chat_message") {
+        const { readingId, message } = data;
+        if (
+          !activeReadingSessions[readingId] ||
+          !activeReadingSessions[readingId].participants.has(userId)
+        )
+          return;
+        const chatMsg = {
+          senderId: userId,
+          message,
+          timestamp: Date.now(),
+        };
+        activeReadingSessions[readingId].chatTranscript.push(chatMsg);
+        // Forward to both participants
+        notifyUser(activeReadingSessions[readingId].clientId, {
+          type: "reading_chat_message",
+          ...chatMsg,
+        });
+        notifyUser(activeReadingSessions[readingId].readerId, {
+          type: "reading_chat_message",
+          ...chatMsg,
+        });
+        return;
+      }
+
+      // --- Session extension ---
+      if (data.type === "session_extend") {
+        const { readingId, extraMinutes } = data;
+        // In this MVP, extension just notifies both and logs
+        if (
+          !activeReadingSessions[readingId] ||
+          !activeReadingSessions[readingId].participants.has(userId)
+        )
+          return;
+        notifyUser(activeReadingSessions[readingId].clientId, {
+          type: "session_extend",
+          extraMinutes,
+        });
+        notifyUser(activeReadingSessions[readingId].readerId, {
+          type: "session_extend",
+          extraMinutes,
+        });
+        // Optionally: update backend logic for billing/authorization
+        return;
+      }
+
+      // --- Session disconnect (start grace) ---
+      if (data.type === "session_disconnect") {
+        const { readingId } = data;
+        if (
+          !activeReadingSessions[readingId] ||
+          !activeReadingSessions[readingId].participants.has(userId)
+        )
+          return;
+        activeReadingSessions[readingId].participants.delete(userId);
+        activeReadingSessions[readingId].disconnectedAt = new Date();
+        activeReadingSessions[readingId].status = "grace";
+        // Start grace timer for up to 2 minutes
+        if (!activeReadingSessions[readingId].graceTimeout) {
+          activeReadingSessions[readingId].graceTimeout = setTimeout(async () => {
+            // End session if not rejoined
+            if (activeReadingSessions[readingId].participants.size < 2) {
+              clearInterval(activeReadingSessions[readingId].timer!);
+              activeReadingSessions[readingId].status = "ended";
+              await storage.updateReading(readingId, {
+                status: "completed",
+                duration: activeReadingSessions[readingId].billedMinutes,
+                totalPrice:
+                  activeReadingSessions[readingId].billedMinutes *
+                  activeReadingSessions[readingId].pricePerMinute,
+                completedAt: new Date(),
+              });
+              // Notify both (if still connected)
+              notifyUser(activeReadingSessions[readingId].clientId, {
+                type: "session_end",
+                reason: "disconnected_timeout",
+              });
+              notifyUser(activeReadingSessions[readingId].readerId, {
+                type: "session_end",
+                reason: "disconnected_timeout",
+              });
+              // Persist transcript
+              await storage.updateReading(readingId, {
+                notes: JSON.stringify(activeReadingSessions[readingId].chatTranscript),
+              });
+              delete activeReadingSessions[readingId];
+            }
+          }, 2 * 60 * 1000); // 2 min grace
+        }
+        return;
+      }
+
+      // --- Session reconnect (clear grace) ---
+      if (data.type === "session_reconnect") {
+        const { readingId } = data;
+        if (
+          !activeReadingSessions[readingId]
+        )
+          return;
+        activeReadingSessions[readingId].participants.add(userId);
+        if (
+          activeReadingSessions[readingId].participants.size === 2 &&
+          activeReadingSessions[readingId].graceTimeout
+        ) {
+          clearTimeout(activeReadingSessions[readingId].graceTimeout!);
+          activeReadingSessions[readingId].graceTimeout = null;
+          activeReadingSessions[readingId].status = "active";
+          notifyUser(activeReadingSessions[readingId].clientId, {
+            type: "session_resumed",
+          });
+          notifyUser(activeReadingSessions[readingId].readerId, {
+            type: "session_resumed",
+          });
+        }
+        return;
+      }
+
+      // --- Session end (normal or forced) ---
+      if (data.type === "session_end") {
+        const { readingId, summary } = data;
+        if (
+          !activeReadingSessions[readingId]
+        )
+          return;
+        clearInterval(activeReadingSessions[readingId].timer!);
+        activeReadingSessions[readingId].status = "ended";
+        // Save summary and transcript
+        await storage.updateReading(readingId, {
+          status: "completed",
+          duration: activeReadingSessions[readingId].billedMinutes,
+          totalPrice:
+            activeReadingSessions[readingId].billedMinutes *
+            activeReadingSessions[readingId].pricePerMinute,
+          completedAt: new Date(),
+          notes: JSON.stringify({
+            summary: summary || "",
+            chatTranscript: activeReadingSessions[readingId].chatTranscript,
+          }),
+        });
+        notifyUser(activeReadingSessions[readingId].clientId, {
+          type: "session_end",
+          reason: "normal",
+        });
+        notifyUser(activeReadingSessions[readingId].readerId, {
+          type: "session_end",
+          reason: "normal",
+        });
+        delete activeReadingSessions[readingId];
+        return;
+      }
+    });
+
+    ws.on("close", () => {
+      connectedClients.delete(clientId);
+    });
+  });
   
   // Make WebSocket methods available globally
   (global as any).websocket = {
