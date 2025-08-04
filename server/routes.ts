@@ -309,6 +309,104 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json({ success: true });
   });
 
+  // ========== COMMUNITY FORUM ENDPOINTS ==========
+
+  import { z } from "zod";
+  // GET /api/forum/posts?page=x&pageSize=y
+  app.get("/api/forum/posts", async (req, res) => {
+    const page = Number(req.query.page) || 1;
+    const pageSize = Math.min(Number(req.query.pageSize) || 10, 50);
+    const offset = (page - 1) * pageSize;
+    const posts = await db.select().from(forumPosts).orderBy(desc(forumPosts.createdAt)).limit(pageSize).offset(offset);
+    // Get comment counts
+    const allComments = await db.select().from(forumComments);
+    const postCounts: Record<number, number> = {};
+    allComments.forEach(c => {
+      postCounts[c.postId] = (postCounts[c.postId] || 0) + 1;
+    });
+    res.json(posts.map(p => ({
+      ...p,
+      commentCount: postCounts[p.id] || 0,
+    })));
+  });
+
+  // POST /api/forum/posts
+  app.post("/api/forum/posts", async (req, res) => {
+    if (!req.isAuthenticated?.()) return res.status(401).json({ message: "Sign in required" });
+    const schema = z.object({
+      title: z.string().min(3).max(128),
+      content: z.string().min(10),
+    });
+    const result = schema.safeParse(req.body);
+    if (!result.success) return res.status(400).json({ message: "Invalid post", errors: result.error.errors });
+    try {
+      const post = await storage.createForumPost({
+        userId: req.user.id,
+        title: result.data.title,
+        content: result.data.content,
+        category: "General",
+      });
+      // WS broadcast
+      if ((global as any).websocket?.broadcastToAll) {
+        (global as any).websocket.broadcastToAll({
+          type: "new_forum_post",
+          post: {
+            id: post.id,
+            title: post.title,
+            createdAt: post.createdAt,
+            userId: post.userId,
+          },
+        });
+      }
+      res.json(post);
+    } catch (err: any) {
+      res.status(500).json({ message: err?.message || "Failed to create post" });
+    }
+  });
+
+  // GET /api/forum/posts/:id
+  app.get("/api/forum/posts/:id", async (req, res) => {
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json({ message: "Invalid id" });
+    const post = await storage.getForumPost(id);
+    if (!post) return res.status(404).json({ message: "Not found" });
+    const comments = await storage.getForumCommentsByPost(id);
+    res.json({ ...post, comments });
+  });
+
+  // POST /api/forum/posts/:id/comments
+  app.post("/api/forum/posts/:id/comments", async (req, res) => {
+    if (!req.isAuthenticated?.()) return res.status(401).json({ message: "Sign in required" });
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json({ message: "Invalid id" });
+    const schema = z.object({ content: z.string().min(2) });
+    const result = schema.safeParse(req.body);
+    if (!result.success) return res.status(400).json({ message: "Invalid comment", errors: result.error.errors });
+    try {
+      const comment = await storage.createForumComment({
+        userId: req.user.id,
+        postId: id,
+        content: result.data.content,
+      });
+      // WS broadcast
+      if ((global as any).websocket?.broadcastToAll) {
+        (global as any).websocket.broadcastToAll({
+          type: "new_forum_comment",
+          comment: {
+            id: comment.id,
+            postId: id,
+            userId: req.user.id,
+            content: comment.content,
+            createdAt: comment.createdAt,
+          },
+        });
+      }
+      res.json(comment);
+    } catch (err: any) {
+      res.status(500).json({ message: err?.message || "Failed to add comment" });
+    }
+  });
+
   // Health check endpoint for devops/monitoring
   app.get("/api/health", async (req, res) => {
     try {

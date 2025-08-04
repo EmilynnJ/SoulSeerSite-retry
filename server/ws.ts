@@ -63,6 +63,28 @@ export function setupLiveWebSocket(server: any) {
           viewerCount,
         });
       }
+
+      // --- FORUM EVENTS ---
+      if (data.type === "new_forum_post") {
+        // Global broadcast
+        for (const room of streamRooms.values()) {
+          for (const ws of room) {
+            try {
+              ws.send(JSON.stringify(data));
+            } catch {}
+          }
+        }
+      }
+      if (data.type === "new_forum_comment") {
+        // Global broadcast
+        for (const room of streamRooms.values()) {
+          for (const ws of room) {
+            try {
+              ws.send(JSON.stringify(data));
+            } catch {}
+          }
+        }
+      }
     });
 
     ws.on("close", async () => {
