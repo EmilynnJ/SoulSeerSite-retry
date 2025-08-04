@@ -148,6 +148,78 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ========== LIVESTREAM ENDPOINTS ==========
+
+  import { createLiveStream, endLiveStream } from "./lib/mux.js";
+
+  // Reader starts livestream
+  app.post("/api/reader/live/start", async (req, res) => {
+    if (!req.isAuthenticated?.() || req.user.role !== "reader") {
+      return res.status(403).json({ message: "Only readers can stream" });
+    }
+    try {
+      const { streamKey, playbackId } = await createLiveStream(req.user.id);
+      const ls = await storage.createLivestream({
+        readerId: req.user.id,
+        muxStreamKey: streamKey,
+        muxPlaybackId: playbackId,
+        status: "live",
+        viewerCount: 0,
+        createdAt: new Date(),
+      });
+      res.json({
+        streamKey,
+        playbackId,
+        ingestUrl: "rtmps://global-live.mux.com:443/app",
+        livestream: ls,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || "Failed to start stream" });
+    }
+  });
+
+  // Reader ends livestream
+  app.post("/api/reader/live/stop", async (req, res) => {
+    if (!req.isAuthenticated?.() || req.user.role !== "reader") {
+      return res.status(403).json({ message: "Only readers can end stream" });
+    }
+    const { streamKey } = req.body;
+    if (!streamKey) return res.status(400).json({ message: "Missing streamKey" });
+    try {
+      await endLiveStream(streamKey);
+      // Set status to ended
+      const [livestream] = await db
+        .update(livestreams)
+        .set({ status: "ended", endedAt: new Date() })
+        .where(eq(livestreams.muxStreamKey, streamKey))
+        .returning();
+      res.json({ success: true, livestream });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || "Failed to end stream" });
+    }
+  });
+
+  // Public GET active livestreams
+  app.get("/api/livestreams/active", async (req, res) => {
+    try {
+      const live = await storage.listActiveLivestreams();
+      res.json(live.map((l) => ({
+        ...l,
+        reader: {
+          id: l.reader.id,
+          fullName: l.reader.fullName,
+          profileImage: l.reader.profileImage,
+          specialties: l.reader.specialties,
+        },
+      })));
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || "Failed to fetch livestreams" });
+    }
+  });
+
+  // WebSocket: live namespace join/leave/viewer_count
+  // (Assume ws setup as before; add handlers for join_live, leave_live)
+
   // Health check endpoint for devops/monitoring
   app.get("/api/health", async (req, res) => {
     try {

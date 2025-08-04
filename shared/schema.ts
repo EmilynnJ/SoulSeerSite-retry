@@ -138,6 +138,22 @@ export const forumComments = pgTable("forum_comments", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+// Livestreams (Mux-based)
+export const livestreamStatusEnum = ["scheduled", "live", "ended"] as const;
+export const livestreams = pgTable("livestreams", {
+  id: serial("id").primaryKey(),
+  readerId: integer("reader_id").notNull().references(() => users.id),
+  muxStreamKey: text("mux_stream_key").notNull().unique(),
+  muxPlaybackId: text("mux_playback_id").notNull().unique(),
+  status: text("status", { enum: livestreamStatusEnum }).notNull().default("scheduled"),
+  viewerCount: integer("viewer_count").default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+  endedAt: timestamp("ended_at"),
+});
+
+export type Livestream = typeof livestreams.$inferSelect;
+export type InsertLivestream = typeof livestreams.$inferInsert;
+
 export const gifts = pgTable("gifts", {
   id: serial("id").primaryKey(),
   senderId: integer("sender_id").notNull().references(() => users.id),

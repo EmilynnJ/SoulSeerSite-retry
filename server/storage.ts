@@ -1020,6 +1020,28 @@ export class DatabaseStorage implements IStorage {
       
     return processedGift;
   }
+// --- LIVESTREAMS ---
+
+  async createLivestream(livestream: InsertLivestream): Promise<Livestream> {
+    const [created] = await db.insert(livestreams).values(livestream).returning();
+    return created;
+  }
+
+  async updateLivestream(id: number, patch: Partial<InsertLivestream>): Promise<Livestream | undefined> {
+    const [updated] = await db.update(livestreams).set(patch).where(eq(livestreams.id, id)).returning();
+    return updated;
+  }
+
+  async listActiveLivestreams(): Promise<(Livestream & { reader: User })[]> {
+    const ls = await db.select().from(livestreams)
+      .where(eq(livestreams.status, "live"));
+    const readers = await this.getAllUsers();
+    return ls.map((l) => ({
+      ...l,
+      reader: readers.find(r => r.id === l.readerId)!,
+    }));
+  }
+
 // --- PAYOUTS ---
 
   async createPayout(payout: InsertPayout): Promise<Payout> {
