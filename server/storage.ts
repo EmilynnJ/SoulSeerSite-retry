@@ -1,4 +1,4 @@
-import { users, type User, type InsertUser, type UserUpdate, readings, type Reading, type InsertReading, products, type Product, type InsertProduct, orders, type Order, type InsertOrder, orderItems, type OrderItem, type InsertOrderItem, livestreams, type Livestream, type InsertLivestream, forumPosts, type ForumPost, type InsertForumPost, forumComments, type ForumComment, type InsertForumComment, messages, type Message, type InsertMessage, gifts, type Gift, type InsertGift } from "@shared/schema";
+import { users, type User, type InsertUser, type UserUpdate, readings, type Reading, type InsertReading, products, type Product, type InsertProduct, orders, type Order, type InsertOrder, orderItems, type OrderItem, type InsertOrderItem, livestreams, type Livestream, type InsertLivestream, forumPosts, type ForumPost, type InsertForumPost, forumComments, type ForumComment, type InsertForumComment, messages, type Message, type InsertMessage, gifts, type Gift, type InsertGift, payouts, type Payout, type InsertPayout } from "@shared/schema";
 import session from "express-session";
 import createMemoryStore from "memorystore";
 import connectPgSimple from "connect-pg-simple";
@@ -82,6 +82,12 @@ export interface IStorage {
   
   // Session store for authentication
   sessionStore: SessionStore;
+
+  // --- PAYOUTS ---
+  createPayout(payout: InsertPayout): Promise<Payout>;
+  getPendingPayouts(): Promise<Payout[]>;
+  getReaderPayouts(readerId: number): Promise<Payout[]>;
+  updatePayoutStatus(id: number, status: "pending" | "paid" | "failed", opts?: { stripeTransferId?: string; paidAt?: Date; failureReason?: string }): Promise<Payout | undefined>;
 }
 
 export class MemStorage implements IStorage {
@@ -1013,6 +1019,38 @@ export class DatabaseStorage implements IStorage {
       .returning();
       
     return processedGift;
+  }
+// --- PAYOUTS ---
+
+  async createPayout(payout: InsertPayout): Promise<Payout> {
+    const [created] = await db.insert(payouts).values(payout).returning();
+    return created;
+  }
+
+  async getPendingPayouts(): Promise<Payout[]> {
+    // Returns all payouts with status 'pending'
+    return await db.select().from(payouts).where(eq(payouts.status, "pending"));
+  }
+
+  async getReaderPayouts(readerId: number): Promise<Payout[]> {
+    return await db.select().from(payouts).where(eq(payouts.readerId, readerId));
+  }
+
+  async updatePayoutStatus(
+    id: number,
+    status: "pending" | "paid" | "failed",
+    opts?: { stripeTransferId?: string; paidAt?: Date; failureReason?: string }
+  ): Promise<Payout | undefined> {
+    const update: any = { status };
+    if (opts?.stripeTransferId) update.stripeTransferId = opts.stripeTransferId;
+    if (opts?.paidAt) update.paidAt = opts.paidAt;
+    if (opts?.failureReason) update.failureReason = opts.failureReason;
+    const [updated] = await db
+      .update(payouts)
+      .set(update)
+      .where(eq(payouts.id, id))
+      .returning();
+    return updated;
   }
 }
 

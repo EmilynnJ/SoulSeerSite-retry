@@ -134,6 +134,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Setup Clerk authentication middleware
   setupClerkAuth(app);
 
+  // ---- Admin payout trigger (Vercel-safe) ----
+  import { runPayoutsJob } from "./jobs/payoutScheduler.js";
+  app.get("/api/admin/run-payouts", async (req, res) => {
+    if (!req.isAuthenticated?.() || req.user.role !== "admin") {
+      return res.status(403).json({ message: "Admin only" });
+    }
+    try {
+      const result = await runPayoutsJob();
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || "Failed to run payouts" });
+    }
+  });
+
   // Health check endpoint for devops/monitoring
   app.get("/api/health", async (req, res) => {
     try {

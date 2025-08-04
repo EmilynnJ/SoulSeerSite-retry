@@ -223,6 +223,21 @@ export const insertMessageSchema = createInsertSchema(messages)
 export const insertGiftSchema = createInsertSchema(gifts)
   .omit({ id: true, createdAt: true, processed: true, processedAt: true });
   
+// Payouts Table
+import { pgEnum } from "drizzle-orm/pg-core";
+
+export const payoutStatusEnum = pgEnum("payout_status", ["pending", "paid", "failed"]);
+export const payouts = pgTable("payouts", {
+  id: serial("id").primaryKey(),
+  readerId: integer("reader_id").notNull().references(() => users.id),
+  amountCents: integer("amount_cents").notNull(),
+  status: text("status", { enum: ["pending", "paid", "failed"] }).notNull(),
+  stripeTransferId: text("stripe_transfer_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+  paidAt: timestamp("paid_at"),
+  failureReason: text("failure_reason"),
+});
+
 // Types
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
@@ -235,6 +250,9 @@ export type UserUpdate = Partial<InsertUser> & {
   reviewCount?: number;
   clerkUserId?: string;
 };
+
+export type Payout = typeof payouts.$inferSelect;
+export type InsertPayout = typeof payouts.$inferInsert;
 
 export type InsertReading = z.infer<typeof insertReadingSchema>;
 export type Reading = typeof readings.$inferSelect;
