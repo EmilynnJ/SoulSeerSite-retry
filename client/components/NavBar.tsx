@@ -5,7 +5,8 @@ import { useQuery } from "@tanstack/react-query";
 import AddFundsModal from "./AddFundsModal";
 import { useCart } from "../cart/CartContext";
 import CartDrawer from "./CartDrawer";
-import { ShoppingCart } from "lucide-react";
+import { ShoppingCart, Mail } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 
 const navLinks = [
   { to: "/", label: "Home" },
@@ -24,6 +25,16 @@ export default function NavBar() {
   const [modalOpen, setModalOpen] = useState(false);
   const [cartOpen, setCartOpen] = useState(false);
   const { items } = useCart();
+  // Unread messages
+  const { data: unread } = useQuery({
+    queryKey: ["unreadMessages"],
+    queryFn: async () => {
+      const res = await fetch("/api/messages/unread-count", { credentials: "include" });
+      if (!res.ok) return { count: 0 };
+      return res.json();
+    },
+    staleTime: 10000,
+  });
 
   // Fetch balance
   const { data: balanceData } = useQuery({
@@ -49,9 +60,14 @@ export default function NavBar() {
             <Link
               key={link.to}
               to={link.to}
-              className="font-body text-lg text-white hover:text-pink transition"
+              className="font-body text-lg text-white hover:text-pink transition relative"
             >
               {link.label}
+              {link.to === "/messages" && unread?.count > 0 && (
+                <span className="absolute -top-2 -right-3 bg-gold text-xs text-black rounded-full px-2 font-bold">
+                  {unread.count}
+                </span>
+              )}
             </Link>
           ))}
           <button

@@ -66,7 +66,7 @@ function App() {
                 <Route path="/shop/:id" element={<ProductPage />} />
                 <Route path="/community" element={<Community />} />
                 <Route path="/community/:id" element={<PostDetail />} />
-                <Route path="/messages/*" element={<Messages />} />
+                <Route path="/messages" element={<Messages />} />
                 <Route path="/profile/*" element={<Profile />} />
                 <Route path="/help" element={<HelpCenter />} />
                 <Route path="/policies/*" element={<Policies />} />

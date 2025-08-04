@@ -2908,6 +2908,69 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ message: "Failed to create comment" });
     }
   });
+
+  // --- MESSAGING (DM) ENDPOINTS ---
+  app.get("/api/messages/conversations", async (req, res) => {
+    if (!req.isAuthenticated?.()) return res.status(401).json({ message: "Sign in required" });
+    const convs = await storage.listConversations(req.user.id);
+    // Attach user info
+    const users = await storage.getAllUsers();
+    res.json(convs.map(c => ({
+      ...c,
+      user: users.find(u => u.id === c.userId)
+        ? { id: c.userId, fullName: users.find(u => u.id === c.userId)!.fullName, profileImage: users.find(u => u.id === c.userId)!.profileImage }
+        : { id: c.userId, fullName: "Unknown" },
+      last: c.last,
+      unread: c.unread,
+    })));
+  });
+
+  app.get("/api/messages/:userId", async (req, res) => {
+    if (!req.isAuthenticated?.()) return res.status(401).json({ message: "Sign in required" });
+    const otherId = Number(req.params.userId);
+    if (!otherId) return res.status(400).json({ message: "Invalid userId" });
+    const before = req.query.before ? new Date(String(req.query.before)) : undefined;
+    const msgs = await storage.listMessagesBetween(req.user.id, otherId, before, 50);
+    res.json(msgs.reverse());
+  });
+
+  app.post("/api/messages/:userId", async (req, res) => {
+    if (!req.isAuthenticated?.()) return res.status(401).json({ message: "Sign in required" });
+    const otherId = Number(req.params.userId);
+    if (!otherId) return res.status(400).json({ message: "Invalid userId" });
+    const { content } = req.body;
+    if (!content || typeof content !== "string" || content.length < 1)
+      return res.status(400).json({ message: "Content required" });
+    const msg = await storage.createMessage({
+      senderId: req.user.id,
+      receiverId: otherId,
+      content,
+      createdAt: new Date(),
+      read: false,
+    });
+    // WS notify recipient
+    if ((global as any).websocket?.notifyUser) {
+      (global as any).websocket.notifyUser(otherId, {
+        type: "new_dm",
+        message: msg,
+      });
+    }
+    res.json(msg);
+  });
+
+  app.post("/api/messages/:id/read", async (req, res) => {
+    if (!req.isAuthenticated?.()) return res.status(401).json({ message: "Sign in required" });
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json({ message: "Invalid message id" });
+    const msg = await storage.markMessageAsRead(id);
+    res.json(msg);
+  });
+
+  app.get("/api/messages/unread-count", async (req, res) => {
+    if (!req.isAuthenticated?.()) return res.status(401).json({ message: "Sign in required" });
+    const count = await storage.getUnreadMessageCount(req.user.id);
+    res.json({ count });
+  });
   
   // Messages
   app.get("/api/messages/:userId", async (req, res) => {

@@ -108,4 +108,47 @@ export function setupLiveWebSocket(server: any) {
       } catch {}
     }
   }
+
+  // User-level DM notification
+  const userSockets: Map<number, Set<any>> = new Map();
+
+  (global as any).websocket = {
+    ...((global as any).websocket || {}),
+    notifyUser: (userId: number, msg: any) => {
+      const set = userSockets.get(userId);
+      if (set) {
+        for (const ws of set) {
+          try {
+            ws.send(JSON.stringify(msg));
+          } catch {}
+        }
+      }
+    },
+    broadcastToRoom,
+  };
+
+  // Track userId <=> ws mapping for DMs (requires authenticate handshake)
+  wss.on("connection", (ws) => {
+    ws.on("message", (raw) => {
+      let data: any;
+      try {
+        data = JSON.parse(raw.toString());
+      } catch {
+        return;
+      }
+      if (data.type === "authenticate" && data.userId) {
+        ws.userId = data.userId;
+        if (!userSockets.has(ws.userId)) userSockets.set(ws.userId, new Set());
+        userSockets.get(ws.userId)!.add(ws);
+      }
+      // ...other handlers...
+    });
+
+    ws.on("close", () => {
+      if (ws.userId && userSockets.has(ws.userId)) {
+        userSockets.get(ws.userId)!.delete(ws);
+        if (userSockets.get(ws.userId)!.size === 0) userSockets.delete(ws.userId);
+      }
+    });
+  });
 }
