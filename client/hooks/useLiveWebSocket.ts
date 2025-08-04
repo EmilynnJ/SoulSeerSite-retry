@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 export default function useLiveWebSocket(streamKey: string) {
   const [viewerCount, setViewerCount] = useState(0);
   const [chatMessages, setChatMessages] = useState<any[]>([]);
+  const [giftEvents, setGiftEvents] = useState<any[]>([]);
 
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -35,6 +36,9 @@ export default function useLiveWebSocket(streamKey: string) {
               },
             ]);
           }
+          if (data.type === "new_gift") {
+            setGiftEvents((evs) => [...evs, data]);
+          }
         } catch {}
       };
       ws.onclose = () => {
@@ -62,5 +66,5 @@ export default function useLiveWebSocket(streamKey: string) {
     );
   }
 
-  return { viewerCount, chatMessages, sendChat };
+  return { viewerCount, chatMessages, sendChat, giftEvents };
 }

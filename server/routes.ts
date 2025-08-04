@@ -240,8 +240,74 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // WebSocket: live namespace join/leave/viewer_count
-  // (Assume ws setup as before; add handlers for join_live, leave_live)
+  // ========== GIFTING ENDPOINT ==========
+  import { GIFTS } from "./config/gifts.js";
+
+  app.post("/api/gifts", async (req, res) => {
+    if (!req.isAuthenticated?.() || req.user.role !== "client") {
+      return res.status(403).json({ message: "Clients only" });
+    }
+    const { streamKey, giftId } = req.body;
+    const gift = GIFTS[giftId as keyof typeof GIFTS];
+    if (!gift) return res.status(400).json({ message: "Invalid gift" });
+
+    // Find livestream + reader
+    const [stream] = await db.select().from(livestreams).where(eq(livestreams.muxStreamKey, streamKey));
+    if (!stream || stream.status !== "live")
+      return res.status(400).json({ message: "Stream not live" });
+    const reader = await storage.getUser(stream.readerId);
+    if (!reader) return res.status(400).json({ message: "Reader not found" });
+
+    // Check balance
+    const client = await storage.getUser(req.user.id);
+    if (!client || (client.accountBalance ?? 0) < gift.priceCents)
+      return res.status(400).json({ message: "Insufficient balance" });
+
+    // Deduct from client, add to reader/platform
+    await storage.updateBalances({
+      clientId: client.id,
+      readerId: reader.id,
+      amount: gift.priceCents,
+    });
+
+    // Insert gift row (processed = true)
+    await storage.createGift({
+      senderId: client.id,
+      recipientId: reader.id,
+      livestreamId: stream.id,
+      amount: gift.priceCents,
+      giftType: gift.id,
+      readerAmount: Math.floor(gift.priceCents * 0.7),
+      platformAmount: gift.priceCents - Math.floor(gift.priceCents * 0.7),
+      message: "",
+      createdAt: new Date(),
+      processed: true,
+      processedAt: new Date(),
+    });
+
+    // Broadcast via ws
+    if ((global as any).websocket?.broadcastToRoom) {
+      (global as any).websocket.broadcastToRoom(streamKey, {
+        type: "new_gift",
+        giftId,
+        sender: { id: client.id, name: client.fullName },
+        animation: gift.animation,
+        viewerCount: stream.viewerCount,
+      });
+    }
+    // Personal notification to reader
+    if ((global as any).websocket?.notifyUser) {
+      (global as any).websocket.notifyUser(reader.id, {
+        type: "new_gift",
+        giftId,
+        sender: { id: client.id, name: client.fullName },
+        animation: gift.animation,
+        viewerCount: stream.viewerCount,
+      });
+    }
+
+    res.json({ success: true });
+  });
 
   // Health check endpoint for devops/monitoring
   app.get("/api/health", async (req, res) => {

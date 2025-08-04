@@ -2,6 +2,9 @@ import React, { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import Hls from "hls.js";
 import useLiveWebSocket from "../hooks/useLiveWebSocket";
+import { SignedIn } from "@clerk/clerk-react";
+import GiftToolbar from "../components/GiftToolbar";
+import GiftOverlay from "../components/GiftOverlay";
 
 export default function LiveStreamRoom() {
   const { streamKey } = useParams();
@@ -13,6 +16,7 @@ export default function LiveStreamRoom() {
     viewerCount,
     chatMessages,
     sendChat,
+    giftEvents,
   } = useLiveWebSocket(streamKey || "");
 
   useEffect(() => {
@@ -103,8 +107,12 @@ export default function LiveStreamRoom() {
               Send
             </button>
           </form>
+          <SignedIn>
+            <GiftToolbar streamKey={streamKey || ""} />
+          </SignedIn>
         </div>
       </div>
+      <GiftOverlay events={giftEvents} />
     </div>
   );
 }

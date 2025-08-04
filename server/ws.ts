@@ -52,6 +52,17 @@ export function setupLiveWebSocket(server: any) {
           timestamp: Date.now(),
         });
       }
+      // --- GIFT BROADCAST ---
+      if (data.type === "new_gift") {
+        const { streamKey, giftId, sender, animation, viewerCount } = data;
+        broadcastToRoom(streamKey, {
+          type: "new_gift",
+          giftId,
+          sender,
+          animation,
+          viewerCount,
+        });
+      }
     });
 
     ws.on("close", async () => {

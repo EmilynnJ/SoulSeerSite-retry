@@ -597,6 +597,20 @@ export class MemStorage implements IStorage {
     this.gifts.set(id, processedGift);
     return processedGift;
   }
+
+  // --- GIFT BALANCE UPDATE ---
+  async updateBalances({ clientId, readerId, amount }: { clientId: number; readerId: number; amount: number }) {
+    // Deduct from client
+    await db.update(users)
+      .set({ accountBalance: sql`${users.accountBalance} - ${amount}` })
+      .where(eq(users.id, clientId));
+    // Add to reader (70%)
+    const readerShare = Math.floor(amount * 0.7);
+    await db.update(users)
+      .set({ accountBalance: sql`${users.accountBalance} + ${readerShare}` })
+      .where(eq(users.id, readerId));
+    // Platform keeps 30% (not modeled)
+  }
   
   // Seed data for demonstration
   private seedData() {
