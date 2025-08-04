@@ -217,6 +217,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // GET individual livestream by streamKey
+  app.get("/api/livestreams/:streamKey", async (req, res) => {
+    const { streamKey } = req.params;
+    try {
+      const [stream] = await db.select().from(livestreams).where(eq(livestreams.muxStreamKey, streamKey));
+      if (!stream) return res.status(404).json({ message: "Not found" });
+      const reader = await storage.getUser(stream.readerId);
+      res.json({
+        ...stream,
+        reader: reader
+          ? {
+              id: reader.id,
+              fullName: reader.fullName,
+              profileImage: reader.profileImage,
+              specialties: reader.specialties,
+            }
+          : null,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || "Failed to fetch stream" });
+    }
+  });
+
   // WebSocket: live namespace join/leave/viewer_count
   // (Assume ws setup as before; add handlers for join_live, leave_live)
 

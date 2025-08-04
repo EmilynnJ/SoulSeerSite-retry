@@ -866,6 +866,17 @@ export class DatabaseStorage implements IStorage {
     return updatedLivestream;
   }
 
+  async updateLivestreamViewerCount(streamKey: string, delta: number): Promise<{ viewerCount: number } | null> {
+    const [ls] = await db.select().from(livestreams).where(eq(livestreams.muxStreamKey, streamKey));
+    if (!ls) return null;
+    const viewerCount = Math.max(0, (ls.viewerCount ?? 0) + delta);
+    const [updated] = await db.update(livestreams)
+      .set({ viewerCount })
+      .where(eq(livestreams.muxStreamKey, streamKey))
+      .returning();
+    return updated ? { viewerCount: updated.viewerCount } : null;
+  }
+
   // Forum Post methods
   async createForumPost(forumPost: InsertForumPost): Promise<ForumPost> {
     const now = new Date();

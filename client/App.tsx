@@ -59,7 +59,8 @@ function App() {
                 <Route path="/readings/session/:readingId/chat" element={<ChatSession />} />
                 <Route path="/readings/session/:readingId/video" element={<VideoSession />} />
                 <Route path="/dashboard/readings/summary/:readingId" element={<ReadingSummary />} />
-                <Route path="/live/*" element={<Live />} />
+                <Route path="/live" element={<Live />} />
+                <Route path="/live/:streamKey" element={<LiveStreamRoom />} />
                 <Route path="/shop" element={<Shop />} />
                 <Route path="/shop/checkout" element={<Checkout />} />
                 <Route path="/shop/:id" element={<ProductPage />} />
