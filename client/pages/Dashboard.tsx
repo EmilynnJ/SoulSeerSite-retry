@@ -25,6 +25,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAuthContext } from "../auth/AuthProvider";
 import { useNavigate } from "react-router-dom";
 import apiInstance from "../src/lib/api";
+import EarningsChart from "./ReaderDashboard/EarningsChart";
 
 function ReaderDashboard() {
   const { user } = useAuthContext();
@@ -98,12 +99,10 @@ function ReaderDashboard() {
           </table>
         )}
       </div>
-      {/* Status toggle, earnings, session history, analytics */}
-      <div className="grid md:grid-cols-2 gap-8">
-        <div className="bg-black bg-opacity-70 rounded-xl p-6">
-          <h2 className="font-heading text-xl text-gold mb-4">Earnings Tracker</h2>
-          {/* TODO: Real earnings data */}
-        </div>
+      {/* Earnings chart */}
+      <EarningsChart />
+      {/* Status toggle, session history, analytics */}
+      <div className="grid md:grid-cols-2 gap-8 mt-8">
         <div className="bg-black bg-opacity-70 rounded-xl p-6">
           <h2 className="font-heading text-xl text-gold mb-4">Session History</h2>
           {/* TODO: Session history table */}

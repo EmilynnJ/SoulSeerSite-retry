@@ -27,6 +27,7 @@ import SignUpPage from "./pages/SignUpPage";
 import AuthProvider from "./auth/AuthProvider";
 import NavBar from "./components/NavBar";
 import Footer from "./components/Footer";
+import CartProvider from "./cart/CartContext";
 
 function Layout() {
   return (
@@ -45,31 +46,35 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        <Router>
-          <Routes>
-            <Route element={<Layout />}>
-              <Route path="/" element={<HomePage />} />
-              <Route path="/about" element={<AboutPage />} />
-              <Route path="/dashboard/*" element={<Dashboard />} />
-              <Route path="/readings" element={<Readings />} />
-              <Route path="/readings/:readerId" element={<ReaderProfile />} />
-              <Route path="/readings/session/:readingId" element={<SessionWait />} />
-              <Route path="/readings/session/:readingId/chat" element={<ChatSession />} />
-              <Route path="/readings/session/:readingId/video" element={<VideoSession />} />
-              <Route path="/dashboard/readings/summary/:readingId" element={<ReadingSummary />} />
-              <Route path="/live/*" element={<Live />} />
-              <Route path="/shop/*" element={<Shop />} />
-              <Route path="/community/*" element={<Community />} />
-              <Route path="/messages/*" element={<Messages />} />
-              <Route path="/profile/*" element={<Profile />} />
-              <Route path="/help" element={<HelpCenter />} />
-              <Route path="/policies/*" element={<Policies />} />
-              <Route path="*" element={<NotFound />} />
-            </Route>
-            <Route path="/signin" element={<SignInPage />} />
-            <Route path="/signup" element={<SignUpPage />} />
-          </Routes>
-        </Router>
+        <CartProvider>
+          <Router>
+            <Routes>
+              <Route element={<Layout />}>
+                <Route path="/" element={<HomePage />} />
+                <Route path="/about" element={<AboutPage />} />
+                <Route path="/dashboard/*" element={<Dashboard />} />
+                <Route path="/readings" element={<Readings />} />
+                <Route path="/readings/:readerId" element={<ReaderProfile />} />
+                <Route path="/readings/session/:readingId" element={<SessionWait />} />
+                <Route path="/readings/session/:readingId/chat" element={<ChatSession />} />
+                <Route path="/readings/session/:readingId/video" element={<VideoSession />} />
+                <Route path="/dashboard/readings/summary/:readingId" element={<ReadingSummary />} />
+                <Route path="/live/*" element={<Live />} />
+                <Route path="/shop" element={<Shop />} />
+                <Route path="/shop/checkout" element={<Checkout />} />
+                <Route path="/shop/:id" element={<ProductPage />} />
+                <Route path="/community/*" element={<Community />} />
+                <Route path="/messages/*" element={<Messages />} />
+                <Route path="/profile/*" element={<Profile />} />
+                <Route path="/help" element={<HelpCenter />} />
+                <Route path="/policies/*" element={<Policies />} />
+                <Route path="*" element={<NotFound />} />
+              </Route>
+              <Route path="/signin" element={<SignInPage />} />
+              <Route path="/signup" element={<SignUpPage />} />
+            </Routes>
+          </Router>
+        </CartProvider>
       </AuthProvider>
     </QueryClientProvider>
   );
