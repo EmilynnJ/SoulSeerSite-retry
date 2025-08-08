@@ -1112,5 +1112,16 @@ export class DatabaseStorage implements IStorage {
   }
 }
 
+// --- PUSH TOKENS ---
+  async upsertPushToken({ userId, token, platform }: { userId: number; token: string; platform: string }) {
+    // Remove existing token for this user (if any)
+    await db.delete(pushTokens).where(eq(pushTokens.token, token));
+    await db.insert(pushTokens).values({ userId, token, platform, createdAt: new Date() });
+  }
+  async getPushTokensByUser(userId: number) {
+    return await db.select().from(pushTokens).where(eq(pushTokens.userId, userId));
+  }
+}
+
 // Use DatabaseStorage instead of MemStorage for production
 export const storage = new DatabaseStorage();

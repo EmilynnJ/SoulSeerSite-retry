@@ -305,7 +305,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
         viewerCount: stream.viewerCount,
       });
     }
+    // Push notification to reader
+    import { sendPush } from "./lib/push.js";
+    sendPush(
+      reader.id,
+      "New gift!",
+      `${client.fullName} sent a ${gift.label}`,
+      { type: "gift", giftId }
+    );
 
+    res.json({ success: true });
+  });
+
+  // --- PUSH TOKEN REGISTRATION ---
+  app.post("/api/push/token", async (req, res) => {
+    if (!req.isAuthenticated?.()) return res.status(401).json({ message: "Sign in required" });
+    const { token, platform } = req.body;
+    if (!token) return res.status(400).json({ message: "token required" });
+    await storage.upsertPushToken({ userId: req.user.id, token, platform: platform || "web" });
     res.json({ success: true });
   });
 
@@ -2955,6 +2972,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         message: msg,
       });
     }
+    // Push notify recipient (if enabled)
+    import { sendPush } from "./lib/push.js";
+    sendPush(
+      otherId,
+      "New message",
+      content.slice(0, 60),
+      { type: "dm", from: String(req.user.id) }
+    );
     res.json(msg);
   });
 
