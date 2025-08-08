@@ -3000,7 +3000,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // --- MESSAGING (DM) ENDPOINTS ---
-  app.get("/api/messages/conversations", async (req, res) => {
+  // --- DM RATE LIMITERS ---
+const dmSendLimiter = require("express-rate-limit")({ windowMs: 5 * 60 * 1000, max: 20, standardHeaders: true, legacyHeaders: false });
+const dmReadLimiter = require("express-rate-limit")({ windowMs: 2 * 60 * 1000, max: 60 });
+
+  app.get("/api/messages/conversations", dmReadLimiter, async (req, res) => {
     if (!req.isAuthenticated?.()) return res.status(401).json({ message: "Sign in required" });
     const convs = await storage.listConversations(req.user.id);
     // Attach user info
@@ -3015,26 +3019,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
     })));
   });
 
-  app.get("/api/messages/:userId", async (req, res) => {
+  app.get("/api/messages/:userId", dmReadLimiter, async (req, res) => {
     if (!req.isAuthenticated?.()) return res.status(401).json({ message: "Sign in required" });
-    const otherId = Number(req.params.userId);
-    if (!otherId) return res.status(400).json({ message: "Invalid userId" });
-    const before = req.query.before ? new Date(String(req.query.before)) : undefined;
+    const paramSchema = z.object({ userId: z.string().regex(/^[0-9]+$/) });
+    const qSchema = z.object({ before: z.string().optional() });
+    const paramRes = paramSchema.safeParse(req.params);
+    if (!paramRes.success) return res.status(400).json({ message: "Invalid userId" });
+    const otherId = Number(paramRes.data.userId);
+    const qRes = qSchema.safeParse(req.query);
+    const before = qRes.success && qRes.data.before ? new Date(qRes.data.before) : undefined;
     const msgs = await storage.listMessagesBetween(req.user.id, otherId, before, 50);
     res.json(msgs.reverse());
   });
 
-  app.post("/api/messages/:userId", async (req, res) => {
+  app.post("/api/messages/:userId", dmSendLimiter, async (req, res) => {
     if (!req.isAuthenticated?.()) return res.status(401).json({ message: "Sign in required" });
-    const otherId = Number(req.params.userId);
-    if (!otherId) return res.status(400).json({ message: "Invalid userId" });
-    const { content } = req.body;
-    if (!content || typeof content !== "string" || content.length < 1)
-      return res.status(400).json({ message: "Content required" });
+    const paramSchema = z.object({ userId: z.string().regex(/^[0-9]+$/) });
+    const bodySchema = z.object({ content: z.string().min(1).max(2000) });
+    const paramRes = paramSchema.safeParse(req.params);
+    const bodyRes = bodySchema.safeParse(req.body);
+    if (!paramRes.success) return res.status(400).json({ message: "Invalid userId" });
+    if (!bodyRes.success) return res.status(400).json({ message: "Invalid content", errors: bodyRes.error.errors });
+    const otherId = Number(paramRes.data.userId);
     const msg = await storage.createMessage({
       senderId: req.user.id,
       receiverId: otherId,
-      content,
+      content: bodyRes.data.content,
       createdAt: new Date(),
       read: false,
     });
@@ -3050,21 +3060,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
     sendPush(
       otherId,
       "New message",
-      content.slice(0, 60),
+      bodyRes.data.content.slice(0, 60),
       { type: "dm", from: String(req.user.id) }
     );
     res.json(msg);
   });
 
-  app.post("/api/messages/:id/read", async (req, res) => {
+  app.post("/api/messages/:id/read", dmSendLimiter, async (req, res) => {
     if (!req.isAuthenticated?.()) return res.status(401).json({ message: "Sign in required" });
-    const id = Number(req.params.id);
-    if (!id) return res.status(400).json({ message: "Invalid message id" });
+    const paramSchema = z.object({ id: z.string().regex(/^[0-9]+$/) });
+    const paramRes = paramSchema.safeParse(req.params);
+    if (!paramRes.success) return res.status(400).json({ message: "Invalid message id" });
+    const id = Number(paramRes.data.id);
     const msg = await storage.markMessageAsRead(id);
     res.json(msg);
   });
 
-  app.get("/api/messages/unread-count", async (req, res) => {
+  app.get("/api/messages/unread-count", dmReadLimiter, async (req, res) => {
     if (!req.isAuthenticated?.()) return res.status(401).json({ message: "Sign in required" });
     const count = await storage.getUnreadMessageCount(req.user.id);
     res.json({ count });

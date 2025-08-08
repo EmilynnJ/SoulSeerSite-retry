@@ -35,10 +35,11 @@ export const messages = pgTable("messages", {
   senderId: integer("sender_id").notNull().references(() => users.id),
   receiverId: integer("receiver_id").notNull().references(() => users.id),
   content: text("content").notNull(),
-  isPaid: boolean("is_paid").default(false),
-  price: integer("price"),
-  readAt: timestamp("read_at"),
   createdAt: timestamp("created_at").defaultNow(),
+  read: boolean("read").default(false),
+  readAt: timestamp("read_at"),
+  price: integer("price"),
+  isPaid: boolean("is_paid"),
 });
 
 export const readings = pgTable("readings", {

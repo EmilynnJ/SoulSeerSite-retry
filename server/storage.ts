@@ -481,43 +481,61 @@ export class MemStorage implements IStorage {
   
   // Messages
   async createMessage(insertMessage: InsertMessage): Promise<Message> {
-    const id = this.currentMessageId++;
-    const message: Message = {
+    const [createdMessage] = await db.insert(messages).values({
       ...insertMessage,
-      id,
       createdAt: new Date(),
-      readAt: null,
+      read: false,
       price: insertMessage.price ?? null,
       isPaid: insertMessage.isPaid ?? null
-    };
-    this.messages.set(id, message);
-    return message;
+    }).returning();
+    return createdMessage;
   }
-  
-  async getMessagesByUsers(userId1: number, userId2: number): Promise<Message[]> {
-    return Array.from(this.messages.values()).filter(
-      message => 
-        (message.senderId === userId1 && message.receiverId === userId2) ||
-        (message.senderId === userId2 && message.receiverId === userId1)
+
+  async listConversations(userId: number): Promise<any[]> {
+    // Get all messages where user is sender or recipient
+    const msgs = await db.select().from(messages).where(
+      or(eq(messages.senderId, userId), eq(messages.receiverId, userId))
     );
+    // Group by other user
+    const convMap: Record<number, { userId: number; last: Message; unread: number }> = {};
+    msgs.forEach(m => {
+      const other = m.senderId === userId ? m.receiverId : m.senderId;
+      if (!convMap[other] || (convMap[other].last.createdAt < m.createdAt)) {
+        convMap[other] = { userId: other, last: m, unread: 0 };
+      }
+      if (m.receiverId === userId && !m.read) convMap[other].unread += 1;
+    });
+    return Object.values(convMap);
   }
-  
+
+  async listMessagesBetween(a: number, b: number, before?: Date, limit = 50): Promise<Message[]> {
+    let q = db.select().from(messages).where(
+      or(
+        and(eq(messages.senderId, a), eq(messages.receiverId, b)),
+        and(eq(messages.senderId, b), eq(messages.receiverId, a))
+      )
+    );
+    if (before) q = q.where(lt(messages.createdAt, before));
+    return await q.orderBy(desc(messages.createdAt)).limit(limit);
+  }
+
   async getUnreadMessageCount(userId: number): Promise<number> {
-    return Array.from(this.messages.values()).filter(
-      message => message.receiverId === userId && message.readAt === null
-    ).length;
+    const result = await db.select({ count: sql`count(*)` })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.receiverId, userId),
+          eq(messages.read, false)
+        )
+      );
+    return Number(result[0]?.count || 0);
   }
-  
+
   async markMessageAsRead(id: number): Promise<Message | undefined> {
-    const message = this.messages.get(id);
-    if (!message) return undefined;
-    
-    const updatedMessage: Message = {
-      ...message,
-      readAt: new Date()
-    };
-    
-    this.messages.set(id, updatedMessage);
+    const [updatedMessage] = await db.update(messages)
+      .set({ read: true })
+      .where(eq(messages.id, id))
+      .returning();
     return updatedMessage;
   }
   
