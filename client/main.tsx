@@ -12,6 +12,7 @@ function PushBootstrap() {
 
 if (process.env.NODE_ENV === "production" && "serviceWorker" in navigator) {
   navigator.serviceWorker.register("/firebase-messaging-sw.js").catch(() => {});
+  navigator.serviceWorker.register("/service-worker.js").catch(() => {});
 }
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
