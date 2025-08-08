@@ -152,21 +152,94 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   import { createLiveStream, endLiveStream } from "./lib/mux.js";
 
-  // Reader starts livestream
+  // Reader schedule livestream
+  app.post("/api/reader/live/schedule", async (req, res) => {
+    if (!req.isAuthenticated?.() || req.user.role !== "reader") {
+      return res.status(403).json({ message: "Only readers can schedule" });
+    }
+    const zod = z.object({
+      title: z.string().min(3),
+      description: z.string().optional(),
+      scheduledFor: z.string().refine(v => new Date(v) > new Date(), "Must be a future date"),
+    });
+    const result = zod.safeParse(req.body);
+    if (!result.success) return res.status(400).json({ message: "Invalid data", errors: result.error.errors });
+    try {
+      const ls = await storage.createLivestreamSchedule({
+        readerId: req.user.id,
+        title: result.data.title,
+        description: result.data.description,
+        scheduledFor: new Date(result.data.scheduledFor),
+      });
+      res.json(ls);
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || "Failed to schedule stream" });
+    }
+  });
+
+  // GET scheduled livestreams
+  app.get("/api/livestreams/scheduled", async (_req, res) => {
+    try {
+      const scheduled = await storage.listScheduledLivestreams();
+      res.json(scheduled);
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || "Failed to fetch scheduled" });
+    }
+  });
+
+  // POST /api/livestreams/:id/remind (subscribe)
+  app.post("/api/livestreams/:id/remind", async (req, res) => {
+    if (!req.isAuthenticated?.()) return res.status(401).json({ message: "Sign in required" });
+    const livestreamId = Number(req.params.id);
+    if (!livestreamId) return res.status(400).json({ message: "Invalid id" });
+    await storage.subscribeLivestream({ livestreamId, userId: req.user.id });
+    res.json({ success: true });
+  });
+
+  // Reader starts livestream (auto-matches scheduled)
   app.post("/api/reader/live/start", async (req, res) => {
     if (!req.isAuthenticated?.() || req.user.role !== "reader") {
       return res.status(403).json({ message: "Only readers can stream" });
     }
     try {
+      // Find matching scheduled within +/- 60 min
+      const now = new Date();
+      const oneHour = 60 * 60 * 1000;
+      const scheduled = (await storage.listScheduledLivestreams()).find(
+        (ls: any) =>
+          ls.readerId === req.user.id &&
+          ls.scheduledFor &&
+          Math.abs(new Date(ls.scheduledFor).getTime() - now.getTime()) <= oneHour
+      );
       const { streamKey, playbackId } = await createLiveStream(req.user.id);
-      const ls = await storage.createLivestream({
-        readerId: req.user.id,
-        muxStreamKey: streamKey,
-        muxPlaybackId: playbackId,
-        status: "live",
-        viewerCount: 0,
-        createdAt: new Date(),
-      });
+      let ls;
+      if (scheduled) {
+        ls = await storage.updateLivestream(scheduled.id, {
+          muxStreamKey: streamKey,
+          muxPlaybackId: playbackId,
+          status: "live",
+        });
+      } else {
+        ls = await storage.createLivestream({
+          readerId: req.user.id,
+          muxStreamKey: streamKey,
+          muxPlaybackId: playbackId,
+          status: "live",
+          viewerCount: 0,
+          createdAt: new Date(),
+        });
+      }
+      // Push to subscribers if any
+      const subs = await storage.listSubscriptionsByLivestream(ls.id);
+      for (const sub of subs) {
+        import { sendPush } from "./lib/push.js";
+        sendPush(
+          sub.userId,
+          "Live now!",
+          `${req.user.fullName} is live`,
+          { type: "live_now", livestreamId: String(ls.id) }
+        );
+      }
       res.json({
         streamKey,
         playbackId,

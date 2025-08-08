@@ -149,7 +149,38 @@ export const livestreams = pgTable("livestreams", {
   viewerCount: integer("viewer_count").default(0),
   createdAt: timestamp("created_at").defaultNow(),
   endedAt: timestamp("ended_at"),
+  // SCHEDULING
+  title: text("title"),
+  description: text("description"),
+  scheduledFor: timestamp("scheduled_for"),
+  reminderSent: boolean("reminder_sent").default(false),
 });
+
+export const livestreamSubscriptions = pgTable("livestream_subscriptions", {
+  id: serial("id").primaryKey(),
+  livestreamId: integer("livestream_id").notNull().references(() => livestreams.id, { onDelete: "cascade" }),
+  userId: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at").defaultNow(),
+  reminderSentAt: timestamp("reminder_sent_at"),
+});
+export type LivestreamSubscription = typeof livestreamSubscriptions.$inferSelect;
+export type InsertLivestreamSubscription = typeof livestreamSubscriptions.$inferInsert;
+
+// Content flags
+export const contentFlags = pgTable("content_flags", {
+  id: serial("id").primaryKey(),
+  type: text("type", { enum: ["post", "comment", "message", "livestream"] }).notNull(),
+  targetId: integer("target_id").notNull(),
+  reporterId: integer("reporter_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  reason: text("reason"),
+  status: text("status", { enum: ["open", "reviewed", "dismissed"] }).notNull().default("open"),
+  createdAt: timestamp("created_at").defaultNow(),
+  reviewedBy: integer("reviewed_by").references(() => users.id),
+  reviewedAt: timestamp("reviewed_at"),
+  notes: text("notes"),
+});
+export type ContentFlag = typeof contentFlags.$inferSelect;
+export type InsertContentFlag = typeof contentFlags.$inferInsert;
 
 export type Livestream = typeof livestreams.$inferSelect;
 export type InsertLivestream = typeof livestreams.$inferInsert;

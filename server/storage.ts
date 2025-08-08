@@ -891,6 +891,88 @@ export class DatabaseStorage implements IStorage {
     return updated ? { viewerCount: updated.viewerCount } : null;
   }
 
+  // --- LIVESTREAM SCHEDULING & SUBSCRIPTIONS ---
+  async createLivestreamSchedule({ readerId, title, description, scheduledFor }: { readerId: number, title: string, description?: string, scheduledFor: Date }) {
+    const [row] = await db.insert(livestreams).values({
+      readerId,
+      title,
+      description,
+      scheduledFor,
+      status: "scheduled",
+      viewerCount: 0,
+      reminderSent: false,
+      createdAt: new Date(),
+    }).returning();
+    return row;
+  }
+  async subscribeLivestream({ livestreamId, userId }: { livestreamId: number, userId: number }) {
+    // Upsert
+    try {
+      const [existing] = await db.select().from(livestreamSubscriptions).where(and(eq(livestreamSubscriptions.livestreamId, livestreamId), eq(livestreamSubscriptions.userId, userId)));
+      if (!existing) {
+        await db.insert(livestreamSubscriptions).values({ livestreamId, userId, createdAt: new Date() });
+      }
+    } catch {}
+  }
+  async listScheduledLivestreams() {
+    // Only future scheduled
+    const now = new Date();
+    const rows = await db.select().from(livestreams).where(and(eq(livestreams.status, "scheduled"), sql`${livestreams.scheduledFor} > ${now}`)).orderBy(asc(livestreams.scheduledFor));
+    const readers = await this.getAllUsers();
+    return rows.map(l => ({
+      ...l,
+      reader: readers.find(r => r.id === l.readerId)
+        ? {
+            id: readers.find(r => r.id === l.readerId)!.id,
+            fullName: readers.find(r => r.id === l.readerId)!.fullName,
+            profileImage: readers.find(r => r.id === l.readerId)!.profileImage,
+            specialties: readers.find(r => r.id === l.readerId)!.specialties,
+          }
+        : null,
+    }));
+  }
+  async listSubscriptionsByLivestream(livestreamId: number) {
+    return await db.select().from(livestreamSubscriptions).where(eq(livestreamSubscriptions.livestreamId, livestreamId));
+  }
+  async markSubscriptionReminderSent(livestreamId: number, userId: number, date: Date) {
+    await db.update(livestreamSubscriptions)
+      .set({ reminderSentAt: date })
+      .where(and(eq(livestreamSubscriptions.livestreamId, livestreamId), eq(livestreamSubscriptions.userId, userId)));
+  }
+  async setLivestreamReminderSent(livestreamId: number) {
+    await db.update(livestreams)
+      .set({ reminderSent: true })
+      .where(eq(livestreams.id, livestreamId));
+  }
+  async getAdmins() {
+    return await db.select().from(users).where(eq(users.role, "admin"));
+  }
+
+  // --- CONTENT FLAGS ---
+  async createContentFlag({ type, targetId, reporterId, reason }: { type: string, targetId: number, reporterId: number, reason?: string }) {
+    const [flag] = await db.insert(contentFlags).values({
+      type,
+      targetId,
+      reporterId,
+      reason,
+      status: "open",
+      createdAt: new Date(),
+    }).returning();
+    return flag;
+  }
+  async listFlags(status?: "open" | "reviewed" | "dismissed") {
+    let q = db.select().from(contentFlags);
+    if (status) q = q.where(eq(contentFlags.status, status));
+    return await q.orderBy(desc(contentFlags.createdAt));
+  }
+  async updateFlagStatus(id: number, { status, reviewedBy, notes }: { status: "open" | "reviewed" | "dismissed", reviewedBy?: number, notes?: string }) {
+    const update: any = { status, reviewedAt: new Date() };
+    if (reviewedBy) update.reviewedBy = reviewedBy;
+    if (notes) update.notes = notes;
+    const [flag] = await db.update(contentFlags).set(update).where(eq(contentFlags.id, id)).returning();
+    return flag;
+  }
+
   // Forum Post methods
   async createForumPost(forumPost: InsertForumPost): Promise<ForumPost> {
     const now = new Date();
