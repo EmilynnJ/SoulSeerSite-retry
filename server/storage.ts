@@ -170,7 +170,7 @@ export class MemStorage implements IStorage {
     const id = this.currentUserId++;
     const now = new Date();
     // If password not supplied, generate a random 32-char string to satisfy NOT NULL constraint
-    let password = insertUser.password;
+    let {password} = insertUser;
     if (!password) {
       password = Array.from({ length: 32 }, () =>
         Math.floor(Math.random() * 36).toString(36)
