@@ -678,7 +678,7 @@ export class DatabaseStorage implements IStorage {
   async createUser(user: InsertUser): Promise<User> {
     const now = new Date();
     // If password not supplied, generate a random 32-char string to satisfy NOT NULL constraint
-    let password = user.password;
+    let {password} = user;
     if (!password) {
       password = Array.from({ length: 32 }, () =>
         Math.floor(Math.random() * 36).toString(36)
