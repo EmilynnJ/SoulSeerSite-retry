@@ -1,4 +1,4 @@
-import { users, type User, type InsertUser, type UserUpdate, readings, type Reading, type InsertReading, products, type Product, type InsertProduct, orders, type Order, type InsertOrder, orderItems, type OrderItem, type InsertOrderItem, livestreams, type Livestream, type InsertLivestream, forumPosts, type ForumPost, type InsertForumPost, forumComments, type ForumComment, type InsertForumComment, messages, type Message, type InsertMessage, gifts, type Gift, type InsertGift } from "@shared/schema";
+import { users, type User, type InsertUser, type UserUpdate, readings, type Reading, type InsertReading, products, type Product, type InsertProduct, orders, type Order, type InsertOrder, orderItems, type OrderItem, type InsertOrderItem, livestreams, type Livestream, type InsertLivestream, forumPosts, type ForumPost, type InsertForumPost, forumComments, type ForumComment, type InsertForumComment, messages, type Message, type InsertMessage, gifts, type Gift, type InsertGift, payouts, type Payout, type InsertPayout } from "@shared/schema";
 import session from "express-session";
 import createMemoryStore from "memorystore";
 import connectPgSimple from "connect-pg-simple";
@@ -17,6 +17,7 @@ export interface IStorage {
   getUser(id: number): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
   getUserByEmail(email: string): Promise<User | undefined>;
+  getUserByClerkId(clerkUserId: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
   updateUser(id: number, user: UserUpdate): Promise<User | undefined>;
   getReaders(): Promise<User[]>;
@@ -81,6 +82,12 @@ export interface IStorage {
   
   // Session store for authentication
   sessionStore: SessionStore;
+
+  // --- PAYOUTS ---
+  createPayout(payout: InsertPayout): Promise<Payout>;
+  getPendingPayouts(): Promise<Payout[]>;
+  getReaderPayouts(readerId: number): Promise<Payout[]>;
+  updatePayoutStatus(id: number, status: "pending" | "paid" | "failed", opts?: { stripeTransferId?: string; paidAt?: Date; failureReason?: string }): Promise<Payout | undefined>;
 }
 
 export class MemStorage implements IStorage {
@@ -153,12 +160,26 @@ export class MemStorage implements IStorage {
     );
   }
 
+  async getUserByClerkId(clerkUserId: string): Promise<User | undefined> {
+    return Array.from(this.users.values()).find(
+      (user) => user.clerkUserId === clerkUserId
+    );
+  }
+
   async createUser(insertUser: InsertUser): Promise<User> {
     const id = this.currentUserId++;
     const now = new Date();
+    // If password not supplied, generate a random 32-char string to satisfy NOT NULL constraint
+    let {password} = insertUser;
+    if (!password) {
+      password = Array.from({ length: 32 }, () =>
+        Math.floor(Math.random() * 36).toString(36)
+      ).join("");
+    }
     const user: User = { 
       ...insertUser, 
       id, 
+      password,
       createdAt: now, 
       lastActive: now, 
       isOnline: false,
@@ -460,43 +481,61 @@ export class MemStorage implements IStorage {
   
   // Messages
   async createMessage(insertMessage: InsertMessage): Promise<Message> {
-    const id = this.currentMessageId++;
-    const message: Message = {
+    const [createdMessage] = await db.insert(messages).values({
       ...insertMessage,
-      id,
       createdAt: new Date(),
-      readAt: null,
+      read: false,
       price: insertMessage.price ?? null,
       isPaid: insertMessage.isPaid ?? null
-    };
-    this.messages.set(id, message);
-    return message;
+    }).returning();
+    return createdMessage;
   }
-  
-  async getMessagesByUsers(userId1: number, userId2: number): Promise<Message[]> {
-    return Array.from(this.messages.values()).filter(
-      message => 
-        (message.senderId === userId1 && message.receiverId === userId2) ||
-        (message.senderId === userId2 && message.receiverId === userId1)
+
+  async listConversations(userId: number): Promise<any[]> {
+    // Get all messages where user is sender or recipient
+    const msgs = await db.select().from(messages).where(
+      or(eq(messages.senderId, userId), eq(messages.receiverId, userId))
     );
+    // Group by other user
+    const convMap: Record<number, { userId: number; last: Message; unread: number }> = {};
+    msgs.forEach(m => {
+      const other = m.senderId === userId ? m.receiverId : m.senderId;
+      if (!convMap[other] || (convMap[other].last.createdAt < m.createdAt)) {
+        convMap[other] = { userId: other, last: m, unread: 0 };
+      }
+      if (m.receiverId === userId && !m.read) convMap[other].unread += 1;
+    });
+    return Object.values(convMap);
   }
-  
+
+  async listMessagesBetween(a: number, b: number, before?: Date, limit = 50): Promise<Message[]> {
+    let q = db.select().from(messages).where(
+      or(
+        and(eq(messages.senderId, a), eq(messages.receiverId, b)),
+        and(eq(messages.senderId, b), eq(messages.receiverId, a))
+      )
+    );
+    if (before) q = q.where(lt(messages.createdAt, before));
+    return await q.orderBy(desc(messages.createdAt)).limit(limit);
+  }
+
   async getUnreadMessageCount(userId: number): Promise<number> {
-    return Array.from(this.messages.values()).filter(
-      message => message.receiverId === userId && message.readAt === null
-    ).length;
+    const result = await db.select({ count: sql`count(*)` })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.receiverId, userId),
+          eq(messages.read, false)
+        )
+      );
+    return Number(result[0]?.count || 0);
   }
-  
+
   async markMessageAsRead(id: number): Promise<Message | undefined> {
-    const message = this.messages.get(id);
-    if (!message) return undefined;
-    
-    const updatedMessage: Message = {
-      ...message,
-      readAt: new Date()
-    };
-    
-    this.messages.set(id, updatedMessage);
+    const [updatedMessage] = await db.update(messages)
+      .set({ read: true })
+      .where(eq(messages.id, id))
+      .returning();
     return updatedMessage;
   }
   
@@ -576,6 +615,20 @@ export class MemStorage implements IStorage {
     this.gifts.set(id, processedGift);
     return processedGift;
   }
+
+  // --- GIFT BALANCE UPDATE ---
+  async updateBalances({ clientId, readerId, amount }: { clientId: number; readerId: number; amount: number }) {
+    // Deduct from client
+    await db.update(users)
+      .set({ accountBalance: sql`${users.accountBalance} - ${amount}` })
+      .where(eq(users.id, clientId));
+    // Add to reader (70%)
+    const readerShare = Math.floor(amount * 0.7);
+    await db.update(users)
+      .set({ accountBalance: sql`${users.accountBalance} + ${readerShare}` })
+      .where(eq(users.id, readerId));
+    // Platform keeps 30% (not modeled)
+  }
   
   // Seed data for demonstration
   private seedData() {
@@ -617,10 +670,23 @@ export class DatabaseStorage implements IStorage {
     return user;
   }
 
+  async getUserByClerkId(clerkUserId: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.clerkUserId, clerkUserId));
+    return user;
+  }
+
   async createUser(user: InsertUser): Promise<User> {
     const now = new Date();
+    // If password not supplied, generate a random 32-char string to satisfy NOT NULL constraint
+    let {password} = user;
+    if (!password) {
+      password = Array.from({ length: 32 }, () =>
+        Math.floor(Math.random() * 36).toString(36)
+      ).join("");
+    }
     const [createdUser] = await db.insert(users).values({
       ...user,
+      password,
       createdAt: now,
       lastActive: now,
       isOnline: false,
@@ -832,6 +898,99 @@ export class DatabaseStorage implements IStorage {
     return updatedLivestream;
   }
 
+  async updateLivestreamViewerCount(streamKey: string, delta: number): Promise<{ viewerCount: number } | null> {
+    const [ls] = await db.select().from(livestreams).where(eq(livestreams.muxStreamKey, streamKey));
+    if (!ls) return null;
+    const viewerCount = Math.max(0, (ls.viewerCount ?? 0) + delta);
+    const [updated] = await db.update(livestreams)
+      .set({ viewerCount })
+      .where(eq(livestreams.muxStreamKey, streamKey))
+      .returning();
+    return updated ? { viewerCount: updated.viewerCount } : null;
+  }
+
+  // --- LIVESTREAM SCHEDULING & SUBSCRIPTIONS ---
+  async createLivestreamSchedule({ readerId, title, description, scheduledFor }: { readerId: number, title: string, description?: string, scheduledFor: Date }) {
+    const [row] = await db.insert(livestreams).values({
+      readerId,
+      title,
+      description,
+      scheduledFor,
+      status: "scheduled",
+      viewerCount: 0,
+      reminderSent: false,
+      createdAt: new Date(),
+    }).returning();
+    return row;
+  }
+  async subscribeLivestream({ livestreamId, userId }: { livestreamId: number, userId: number }) {
+    // Upsert
+    try {
+      const [existing] = await db.select().from(livestreamSubscriptions).where(and(eq(livestreamSubscriptions.livestreamId, livestreamId), eq(livestreamSubscriptions.userId, userId)));
+      if (!existing) {
+        await db.insert(livestreamSubscriptions).values({ livestreamId, userId, createdAt: new Date() });
+      }
+    } catch {}
+  }
+  async listScheduledLivestreams() {
+    // Only future scheduled
+    const now = new Date();
+    const rows = await db.select().from(livestreams).where(and(eq(livestreams.status, "scheduled"), sql`${livestreams.scheduledFor} > ${now}`)).orderBy(asc(livestreams.scheduledFor));
+    const readers = await this.getAllUsers();
+    return rows.map(l => ({
+      ...l,
+      reader: readers.find(r => r.id === l.readerId)
+        ? {
+            id: readers.find(r => r.id === l.readerId)!.id,
+            fullName: readers.find(r => r.id === l.readerId)!.fullName,
+            profileImage: readers.find(r => r.id === l.readerId)!.profileImage,
+            specialties: readers.find(r => r.id === l.readerId)!.specialties,
+          }
+        : null,
+    }));
+  }
+  async listSubscriptionsByLivestream(livestreamId: number) {
+    return await db.select().from(livestreamSubscriptions).where(eq(livestreamSubscriptions.livestreamId, livestreamId));
+  }
+  async markSubscriptionReminderSent(livestreamId: number, userId: number, date: Date) {
+    await db.update(livestreamSubscriptions)
+      .set({ reminderSentAt: date })
+      .where(and(eq(livestreamSubscriptions.livestreamId, livestreamId), eq(livestreamSubscriptions.userId, userId)));
+  }
+  async setLivestreamReminderSent(livestreamId: number) {
+    await db.update(livestreams)
+      .set({ reminderSent: true })
+      .where(eq(livestreams.id, livestreamId));
+  }
+  async getAdmins() {
+    return await db.select().from(users).where(eq(users.role, "admin"));
+  }
+
+  // --- CONTENT FLAGS ---
+  async createContentFlag({ type, targetId, reporterId, reason }: { type: string, targetId: number, reporterId: number, reason?: string }) {
+    const [flag] = await db.insert(contentFlags).values({
+      type,
+      targetId,
+      reporterId,
+      reason,
+      status: "open",
+      createdAt: new Date(),
+    }).returning();
+    return flag;
+  }
+  async listFlags(status?: "open" | "reviewed" | "dismissed") {
+    let q = db.select().from(contentFlags);
+    if (status) q = q.where(eq(contentFlags.status, status));
+    return await q.orderBy(desc(contentFlags.createdAt));
+  }
+  async updateFlagStatus(id: number, { status, reviewedBy, notes }: { status: "open" | "reviewed" | "dismissed", reviewedBy?: number, notes?: string }) {
+    const update: any = { status, reviewedAt: new Date() };
+    if (reviewedBy) update.reviewedBy = reviewedBy;
+    if (notes) update.notes = notes;
+    const [flag] = await db.update(contentFlags).set(update).where(eq(contentFlags.id, id)).returning();
+    return flag;
+  }
+
   // Forum Post methods
   async createForumPost(forumPost: InsertForumPost): Promise<ForumPost> {
     const now = new Date();
@@ -884,31 +1043,52 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Message methods
+  // --- MESSAGING (DM) ---
   async createMessage(message: InsertMessage): Promise<Message> {
     const [createdMessage] = await db.insert(messages).values({
       ...message,
       createdAt: new Date(),
-      readAt: null,
+      read: false,
       price: message.price ?? null,
       isPaid: message.isPaid ?? null
     }).returning();
-    
     return createdMessage;
   }
 
-  async getMessagesByUsers(userId1: number, userId2: number): Promise<Message[]> {
-    return await db.select().from(messages).where(
+  async listConversations(userId: number): Promise<any[]> {
+    // Get all messages where user is sender or recipient
+    const msgs = await db.select().from(messages).where(
+      or(eq(messages.senderId, userId), eq(messages.receiverId, userId))
+    );
+    // Group by other user
+    const convMap: Record<number, { userId: number; last: Message; unread: number }> = {};
+    msgs.forEach(m => {
+      const other = m.senderId === userId ? m.receiverId : m.senderId;
+      if (!convMap[other] || (convMap[other].last.createdAt < m.createdAt)) {
+        convMap[other] = { userId: other, last: m, unread: 0 };
+      }
+      if (m.receiverId === userId && !m.read) convMap[other].unread += 1;
+    });
+    return Object.values(convMap);
+  }
+
+  async listMessagesBetween(a: number, b: number, before?: Date, limit = 50): Promise<Message[]> {
+    let q = db.select().from(messages).where(
       or(
-        and(
-          eq(messages.senderId, userId1),
-          eq(messages.receiverId, userId2)
-        ),
-        and(
-          eq(messages.senderId, userId2),
-          eq(messages.receiverId, userId1)
-        )
+        and(eq(messages.senderId, a), eq(messages.receiverId, b)),
+        and(eq(messages.senderId, b), eq(messages.receiverId, a))
       )
-    ).orderBy(asc(messages.createdAt));
+    );
+    if (before) q = q.where(lt(messages.createdAt, before));
+    return await q.orderBy(desc(messages.createdAt)).limit(limit);
+  }
+
+  async markMessageAsRead(id: number): Promise<Message | undefined> {
+    const [updatedMessage] = await db.update(messages)
+      .set({ read: true })
+      .where(eq(messages.id, id))
+      .returning();
+    return updatedMessage;
   }
 
   async getUnreadMessageCount(userId: number): Promise<number> {
@@ -917,20 +1097,10 @@ export class DatabaseStorage implements IStorage {
       .where(
         and(
           eq(messages.receiverId, userId),
-          isNull(messages.readAt)
+          eq(messages.read, false)
         )
       );
-    
     return Number(result[0]?.count || 0);
-  }
-
-  async markMessageAsRead(id: number): Promise<Message | undefined> {
-    const [updatedMessage] = await db.update(messages)
-      .set({ readAt: new Date() })
-      .where(eq(messages.id, id))
-      .returning();
-      
-    return updatedMessage;
   }
   
   // Gift methods for livestreams
@@ -985,6 +1155,71 @@ export class DatabaseStorage implements IStorage {
       .returning();
       
     return processedGift;
+  }
+// --- LIVESTREAMS ---
+
+  async createLivestream(livestream: InsertLivestream): Promise<Livestream> {
+    const [created] = await db.insert(livestreams).values(livestream).returning();
+    return created;
+  }
+
+  async updateLivestream(id: number, patch: Partial<InsertLivestream>): Promise<Livestream | undefined> {
+    const [updated] = await db.update(livestreams).set(patch).where(eq(livestreams.id, id)).returning();
+    return updated;
+  }
+
+  async listActiveLivestreams(): Promise<(Livestream & { reader: User })[]> {
+    const ls = await db.select().from(livestreams)
+      .where(eq(livestreams.status, "live"));
+    const readers = await this.getAllUsers();
+    return ls.map((l) => ({
+      ...l,
+      reader: readers.find(r => r.id === l.readerId)!,
+    }));
+  }
+
+// --- PAYOUTS ---
+
+  async createPayout(payout: InsertPayout): Promise<Payout> {
+    const [created] = await db.insert(payouts).values(payout).returning();
+    return created;
+  }
+
+  async getPendingPayouts(): Promise<Payout[]> {
+    // Returns all payouts with status 'pending'
+    return await db.select().from(payouts).where(eq(payouts.status, "pending"));
+  }
+
+  async getReaderPayouts(readerId: number): Promise<Payout[]> {
+    return await db.select().from(payouts).where(eq(payouts.readerId, readerId));
+  }
+
+  async updatePayoutStatus(
+    id: number,
+    status: "pending" | "paid" | "failed",
+    opts?: { stripeTransferId?: string; paidAt?: Date; failureReason?: string }
+  ): Promise<Payout | undefined> {
+    const update: any = { status };
+    if (opts?.stripeTransferId) update.stripeTransferId = opts.stripeTransferId;
+    if (opts?.paidAt) update.paidAt = opts.paidAt;
+    if (opts?.failureReason) update.failureReason = opts.failureReason;
+    const [updated] = await db
+      .update(payouts)
+      .set(update)
+      .where(eq(payouts.id, id))
+      .returning();
+    return updated;
+  }
+}
+
+// --- PUSH TOKENS ---
+  async upsertPushToken({ userId, token, platform }: { userId: number; token: string; platform: string }) {
+    // Remove existing token for this user (if any)
+    await db.delete(pushTokens).where(eq(pushTokens.token, token));
+    await db.insert(pushTokens).values({ userId, token, platform, createdAt: new Date() });
+  }
+  async getPushTokensByUser(userId: number) {
+    return await db.select().from(pushTokens).where(eq(pushTokens.userId, userId));
   }
 }
 

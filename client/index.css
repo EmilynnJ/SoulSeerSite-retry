@@ -1,0 +1,23 @@
+@import url('https://fonts.googleapis.com/css2?family=Alex+Brush&family=Playfair+Display:wght@400;700&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply bg-celestial text-white font-body;
+  background-image: theme('backgroundImage.celestial');
+  min-height: 100vh;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  @apply font-heading text-pink;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  background: #1b1523;
+}
+::-webkit-scrollbar-thumb {
+  background: #FF69B4;
+  border-radius: 8px;
+}

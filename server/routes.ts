@@ -2,7 +2,7 @@ import express, { type Express, Request, Response, NextFunction } from "express"
 import { createServer, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage.js";
-import { setupAuth } from "./auth.js";
+import { setupClerkAuth } from "./clerkAuth.js";
 import { z } from "zod";
 import { UserUpdate, Reading } from "@shared/schema";
 import { db } from "./db";
@@ -131,9 +131,570 @@ async function processCompletedReadingPayment(
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  // Setup authentication routes
-  setupAuth(app);
-  
+  // Setup Clerk authentication middleware
+  setupClerkAuth(app);
+
+  // ---- Admin payout trigger (Vercel-safe) ----
+  import { runPayoutsJob } from "./jobs/payoutScheduler.js";
+  app.get("/api/admin/run-payouts", async (req, res) => {
+    if (!req.isAuthenticated?.() || req.user.role !== "admin") {
+      return res.status(403).json({ message: "Admin only" });
+    }
+    try {
+      const result = await runPayoutsJob();
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || "Failed to run payouts" });
+    }
+  });
+
+  // ========== LIVESTREAM ENDPOINTS ==========
+
+  import { createLiveStream, endLiveStream } from "./lib/mux.js";
+
+  // Reader schedule livestream
+  app.post("/api/reader/live/schedule", async (req, res) => {
+    if (!req.isAuthenticated?.() || req.user.role !== "reader") {
+      return res.status(403).json({ message: "Only readers can schedule" });
+    }
+    const zod = z.object({
+      title: z.string().min(3),
+      description: z.string().optional(),
+      scheduledFor: z.string().refine(v => new Date(v) > new Date(), "Must be a future date"),
+    });
+    const result = zod.safeParse(req.body);
+    if (!result.success) return res.status(400).json({ message: "Invalid data", errors: result.error.errors });
+    try {
+      const ls = await storage.createLivestreamSchedule({
+        readerId: req.user.id,
+        title: result.data.title,
+        description: result.data.description,
+        scheduledFor: new Date(result.data.scheduledFor),
+      });
+      res.json(ls);
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || "Failed to schedule stream" });
+    }
+  });
+
+  // GET scheduled livestreams
+  app.get("/api/livestreams/scheduled", async (_req, res) => {
+    try {
+      const scheduled = await storage.listScheduledLivestreams();
+      res.json(scheduled);
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || "Failed to fetch scheduled" });
+    }
+  });
+
+  // POST /api/livestreams/:id/remind (subscribe)
+  app.post("/api/livestreams/:id/remind", async (req, res) => {
+    if (!req.isAuthenticated?.()) return res.status(401).json({ message: "Sign in required" });
+    const livestreamId = Number(req.params.id);
+    if (!livestreamId) return res.status(400).json({ message: "Invalid id" });
+    await storage.subscribeLivestream({ livestreamId, userId: req.user.id });
+    res.json({ success: true });
+  });
+
+  // Reader starts livestream (auto-matches scheduled)
+  app.post("/api/reader/live/start", async (req, res) => {
+    if (!req.isAuthenticated?.() || req.user.role !== "reader") {
+      return res.status(403).json({ message: "Only readers can stream" });
+    }
+    try {
+      // Find matching scheduled within +/- 60 min
+      const now = new Date();
+      const oneHour = 60 * 60 * 1000;
+      const scheduled = (await storage.listScheduledLivestreams()).find(
+        (ls: any) =>
+          ls.readerId === req.user.id &&
+          ls.scheduledFor &&
+          Math.abs(new Date(ls.scheduledFor).getTime() - now.getTime()) <= oneHour
+      );
+      const { streamKey, playbackId } = await createLiveStream(req.user.id);
+      let ls;
+      if (scheduled) {
+        ls = await storage.updateLivestream(scheduled.id, {
+          muxStreamKey: streamKey,
+          muxPlaybackId: playbackId,
+          status: "live",
+        });
+      } else {
+        ls = await storage.createLivestream({
+          readerId: req.user.id,
+          muxStreamKey: streamKey,
+          muxPlaybackId: playbackId,
+          status: "live",
+          viewerCount: 0,
+          createdAt: new Date(),
+        });
+      }
+      // Push to subscribers if any
+      const subs = await storage.listSubscriptionsByLivestream(ls.id);
+      for (const sub of subs) {
+        import { sendPush } from "./lib/push.js";
+        sendPush(
+          sub.userId,
+          "Live now!",
+          `${req.user.fullName} is live`,
+          { type: "live_now", livestreamId: String(ls.id) }
+        );
+      }
+      res.json({
+        streamKey,
+        playbackId,
+        ingestUrl: "rtmps://global-live.mux.com:443/app",
+        livestream: ls,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || "Failed to start stream" });
+    }
+  });
+
+  // Reader ends livestream
+  app.post("/api/reader/live/stop", async (req, res) => {
+    if (!req.isAuthenticated?.() || req.user.role !== "reader") {
+      return res.status(403).json({ message: "Only readers can end stream" });
+    }
+    const { streamKey } = req.body;
+    if (!streamKey) return res.status(400).json({ message: "Missing streamKey" });
+    try {
+      await endLiveStream(streamKey);
+      // Set status to ended
+      const [livestream] = await db
+        .update(livestreams)
+        .set({ status: "ended", endedAt: new Date() })
+        .where(eq(livestreams.muxStreamKey, streamKey))
+        .returning();
+      res.json({ success: true, livestream });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || "Failed to end stream" });
+    }
+  });
+
+  // Public GET active livestreams
+  app.get("/api/livestreams/active", async (req, res) => {
+    try {
+      const live = await storage.listActiveLivestreams();
+      res.json(live.map((l) => ({
+        ...l,
+        reader: {
+          id: l.reader.id,
+          fullName: l.reader.fullName,
+          profileImage: l.reader.profileImage,
+          specialties: l.reader.specialties,
+        },
+      })));
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || "Failed to fetch livestreams" });
+    }
+  });
+
+  // GET individual livestream by streamKey
+  app.get("/api/livestreams/:streamKey", async (req, res) => {
+    const { streamKey } = req.params;
+    try {
+      const [stream] = await db.select().from(livestreams).where(eq(livestreams.muxStreamKey, streamKey));
+      if (!stream) return res.status(404).json({ message: "Not found" });
+      const reader = await storage.getUser(stream.readerId);
+      res.json({
+        ...stream,
+        reader: reader
+          ? {
+              id: reader.id,
+              fullName: reader.fullName,
+              profileImage: reader.profileImage,
+              specialties: reader.specialties,
+            }
+          : null,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || "Failed to fetch stream" });
+    }
+  });
+
+  // ========== GIFTING ENDPOINT ==========
+  import { GIFTS } from "./config/gifts.js";
+
+  app.post("/api/gifts", async (req, res) => {
+    if (!req.isAuthenticated?.() || req.user.role !== "client") {
+      return res.status(403).json({ message: "Clients only" });
+    }
+    const { streamKey, giftId } = req.body;
+    const gift = GIFTS[giftId as keyof typeof GIFTS];
+    if (!gift) return res.status(400).json({ message: "Invalid gift" });
+
+    // Find livestream + reader
+    const [stream] = await db.select().from(livestreams).where(eq(livestreams.muxStreamKey, streamKey));
+    if (!stream || stream.status !== "live")
+      return res.status(400).json({ message: "Stream not live" });
+    const reader = await storage.getUser(stream.readerId);
+    if (!reader) return res.status(400).json({ message: "Reader not found" });
+
+    // Check balance
+    const client = await storage.getUser(req.user.id);
+    if (!client || (client.accountBalance ?? 0) < gift.priceCents)
+      return res.status(400).json({ message: "Insufficient balance" });
+
+    // Deduct from client, add to reader/platform
+    await storage.updateBalances({
+      clientId: client.id,
+      readerId: reader.id,
+      amount: gift.priceCents,
+    });
+
+    // Insert gift row (processed = true)
+    await storage.createGift({
+      senderId: client.id,
+      recipientId: reader.id,
+      livestreamId: stream.id,
+      amount: gift.priceCents,
+      giftType: gift.id,
+      readerAmount: Math.floor(gift.priceCents * 0.7),
+      platformAmount: gift.priceCents - Math.floor(gift.priceCents * 0.7),
+      message: "",
+      createdAt: new Date(),
+      processed: true,
+      processedAt: new Date(),
+    });
+
+    // Broadcast via ws
+    if ((global as any).websocket?.broadcastToRoom) {
+      (global as any).websocket.broadcastToRoom(streamKey, {
+        type: "new_gift",
+        giftId,
+        sender: { id: client.id, name: client.fullName },
+        animation: gift.animation,
+        viewerCount: stream.viewerCount,
+      });
+    }
+    // Personal notification to reader
+    if ((global as any).websocket?.notifyUser) {
+      (global as any).websocket.notifyUser(reader.id, {
+        type: "new_gift",
+        giftId,
+        sender: { id: client.id, name: client.fullName },
+        animation: gift.animation,
+        viewerCount: stream.viewerCount,
+      });
+    }
+    // Push notification to reader
+    import { sendPush } from "./lib/push.js";
+    sendPush(
+      reader.id,
+      "New gift!",
+      `${client.fullName} sent a ${gift.label}`,
+      { type: "gift", giftId }
+    );
+
+    res.json({ success: true });
+  });
+
+  // --- PUSH TOKEN REGISTRATION ---
+  app.post("/api/push/token", async (req, res) => {
+    if (!req.isAuthenticated?.()) return res.status(401).json({ message: "Sign in required" });
+    const { token, platform } = req.body;
+    if (!token) return res.status(400).json({ message: "token required" });
+    await storage.upsertPushToken({ userId: req.user.id, token, platform: platform || "web" });
+    res.json({ success: true });
+  });
+
+  // ========== COMMUNITY FORUM ENDPOINTS ==========
+
+  import { z } from "zod";
+  // GET /api/forum/posts?page=x&pageSize=y
+  app.get("/api/forum/posts", async (req, res) => {
+    const page = Number(req.query.page) || 1;
+    const pageSize = Math.min(Number(req.query.pageSize) || 10, 50);
+    const offset = (page - 1) * pageSize;
+    const posts = await db.select().from(forumPosts).orderBy(desc(forumPosts.createdAt)).limit(pageSize).offset(offset);
+    // Get comment counts
+    const allComments = await db.select().from(forumComments);
+    const postCounts: Record<number, number> = {};
+    allComments.forEach(c => {
+      postCounts[c.postId] = (postCounts[c.postId] || 0) + 1;
+    });
+    res.json(posts.map(p => ({
+      ...p,
+      commentCount: postCounts[p.id] || 0,
+    })));
+  });
+
+  // POST /api/forum/posts
+  app.post("/api/forum/posts", async (req, res) => {
+    if (!req.isAuthenticated?.()) return res.status(401).json({ message: "Sign in required" });
+    const schema = z.object({
+      title: z.string().min(3).max(128),
+      content: z.string().min(10),
+    });
+    const result = schema.safeParse(req.body);
+    if (!result.success) return res.status(400).json({ message: "Invalid post", errors: result.error.errors });
+    try {
+      const post = await storage.createForumPost({
+        userId: req.user.id,
+        title: result.data.title,
+        content: result.data.content,
+        category: "General",
+      });
+      // WS broadcast
+      if ((global as any).websocket?.broadcastToAll) {
+        (global as any).websocket.broadcastToAll({
+          type: "new_forum_post",
+          post: {
+            id: post.id,
+            title: post.title,
+            createdAt: post.createdAt,
+            userId: post.userId,
+          },
+        });
+      }
+      res.json(post);
+    } catch (err: any) {
+      res.status(500).json({ message: err?.message || "Failed to create post" });
+    }
+  });
+
+  // GET /api/forum/posts/:id
+  app.get("/api/forum/posts/:id", async (req, res) => {
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json({ message: "Invalid id" });
+    const post = await storage.getForumPost(id);
+    if (!post) return res.status(404).json({ message: "Not found" });
+    const comments = await storage.getForumCommentsByPost(id);
+    res.json({ ...post, comments });
+  });
+
+  // POST /api/forum/posts/:id/comments
+  app.post("/api/forum/posts/:id/comments", async (req, res) => {
+    if (!req.isAuthenticated?.()) return res.status(401).json({ message: "Sign in required" });
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json({ message: "Invalid id" });
+    const schema = z.object({ content: z.string().min(2) });
+    const result = schema.safeParse(req.body);
+    if (!result.success) return res.status(400).json({ message: "Invalid comment", errors: result.error.errors });
+    try {
+      const comment = await storage.createForumComment({
+        userId: req.user.id,
+        postId: id,
+        content: result.data.content,
+      });
+      // WS broadcast
+      if ((global as any).websocket?.broadcastToAll) {
+        (global as any).websocket.broadcastToAll({
+          type: "new_forum_comment",
+          comment: {
+            id: comment.id,
+            postId: id,
+            userId: req.user.id,
+            content: comment.content,
+            createdAt: comment.createdAt,
+          },
+        });
+      }
+      res.json(comment);
+    } catch (err: any) {
+      res.status(500).json({ message: err?.message || "Failed to add comment" });
+    }
+  });
+
+  // Health check endpoint for devops/monitoring
+  app.get("/api/health", async (req, res) => {
+    try {
+      // Test DB
+      await storage.getAllUsers();
+
+      // Test Clerk
+      const { CLERK_SECRET_KEY, VITE_CLERK_PUBLISHABLE_KEY, VITE_CLERK_FRONTEND_API_URL } = await import("./env.js");
+      if (!CLERK_SECRET_KEY || !VITE_CLERK_PUBLISHABLE_KEY || !VITE_CLERK_FRONTEND_API_URL) throw new Error("Clerk env missing");
+
+      // Test Stripe
+      const { STRIPE_SECRET_KEY } = await import("./env.js");
+      if (!STRIPE_SECRET_KEY) throw new Error("Stripe env missing");
+
+      res.json({ ok: true, timestamp: Date.now() });
+    } catch (err) {
+      res.status(500).json({ ok: false, error: (err as any).message || "Health check failed" });
+    }
+  });
+
+  // ADMIN-ONLY: Create new reader profile (with image upload and Stripe onboarding)
+  import multer from "multer";
+  import path from "path";
+  import fs from "fs";
+  import { InsertUser } from "@shared/schema";
+  import { randomBytes } from "crypto";
+
+  // Set up multer storage for reader profile images
+  const readerUploads = multer({
+    storage: multer.diskStorage({
+      destination: (req, file, cb) => {
+        const dest = path.join(process.cwd(), "public", "uploads", "readers");
+        if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
+        cb(null, dest);
+      },
+      filename: (req, file, cb) => {
+        const unique = Date.now() + "-" + randomBytes(6).toString("hex");
+        const ext = path.extname(file.originalname).toLowerCase();
+        cb(null, unique + ext);
+      }
+    }),
+    fileFilter: (req, file, cb) => {
+      const allowed = /jpeg|jpg|png|webp/;
+      const ext = path.extname(file.originalname).toLowerCase();
+      if (!allowed.test(ext)) {
+        return cb(new Error("Only image files (jpeg, jpg, png, webp) are allowed!"), false);
+      }
+      cb(null, true);
+    },
+    limits: { fileSize: 5 * 1024 * 1024 } // 5 MB max
+  });
+
+  // Real Stripe Connect onboarding
+  import Stripe from "stripe";
+  import { STRIPE_SECRET_KEY } from "./env.js";
+
+  const stripe = new Stripe(STRIPE_SECRET_KEY, { apiVersion: "2024-04-10" });
+
+  async function triggerStripeConnectOnboarding(reader: any) {
+    // 1. Create a Stripe Connect account for the reader
+    let account;
+    try {
+      account = await stripe.accounts.create({
+        type: "express",
+        email: reader.email,
+        business_type: "individual",
+        individual: {
+          first_name: reader.fullName.split(" ")[0],
+          last_name: reader.fullName.split(" ").slice(1).join(" ") || reader.fullName.split(" ")[0],
+          email: reader.email,
+        },
+        capabilities: {
+          transfers: { requested: true },
+          card_payments: { requested: true },
+        },
+        metadata: {
+          userId: reader.id,
+          username: reader.username,
+        }
+      });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("[STRIPE CONNECT ERROR]", err);
+      throw new Error("Failed to create Stripe Connect account.");
+    }
+
+    // 2. Save the Stripe Connect account ID to the user in DB
+    await storage.updateUser(reader.id, { stripeAccountId: account.id });
+
+    // 3. Generate the onboarding link for the reader to complete their onboarding
+    let onboardingLink: Stripe.AccountLink;
+    try {
+      onboardingLink = await stripe.accountLinks.create({
+        account: account.id,
+        refresh_url: `${process.env.FRONTEND_URL || "https://soulseer.app"}/dashboard/reader/onboarding?refresh=1`,
+        return_url: `${process.env.FRONTEND_URL || "https://soulseer.app"}/dashboard/reader/onboarding?return=1`,
+        type: "account_onboarding",
+      });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("[STRIPE CONNECT LINK ERROR]", err);
+      throw new Error("Failed to generate Stripe Connect onboarding link.");
+    }
+
+    return { onboardingUrl: onboardingLink.url, stripeAccountId: account.id };
+  }
+
+  /**
+   * @route POST /api/admin/readers
+   * @desc Admin-only: Create new reader profile (with file upload, validation, Stripe onboarding)
+   */
+  app.post("/api/admin/readers", readerUploads.single("profileImage"), async (req, res) => {
+    try {
+      if (!req.isAuthenticated?.() || req.user.role !== "admin") {
+        return res.status(403).json({ message: "Only admins can create reader accounts." });
+      }
+
+      // Validate fields
+      const {
+        username, email, fullName, bio, pricingChat, pricingVoice, pricingVideo, specialties, clerkUserId
+      } = req.body;
+
+      if (!username || !email || !fullName) {
+        return res.status(400).json({ message: "Missing required fields: username, email, fullName." });
+      }
+
+      // Check for duplicate username/email
+      if (await storage.getUserByUsername(username)) {
+        return res.status(400).json({ message: "Username already exists." });
+      }
+      if (await storage.getUserByEmail(email)) {
+        return res.status(400).json({ message: "Email already exists." });
+      }
+
+      // Validate profile image (if provided)
+      let profileImagePath = "";
+      if (req.file) {
+        profileImagePath = `/uploads/readers/${req.file.filename}`;
+      }
+
+      // Parse and sanitize specialties
+      let parsedSpecialties: string[] = [];
+      if (specialties) {
+        try {
+          parsedSpecialties = Array.isArray(specialties)
+            ? specialties
+            : JSON.parse(specialties);
+        } catch {
+          parsedSpecialties = (typeof specialties === "string") ? [specialties] : [];
+        }
+      }
+
+      // Parse pricing fields
+      const chat = parseInt(pricingChat, 10) || 0;
+      const voice = parseInt(pricingVoice, 10) || 0;
+      const video = parseInt(pricingVideo, 10) || 0;
+
+      // Create reader in DB
+      const reader: InsertUser = {
+        username,
+        email,
+        fullName,
+        role: "reader",
+        bio: bio || "",
+        specialties: parsedSpecialties,
+        pricing: chat,
+        pricingChat: chat,
+        pricingVoice: voice,
+        pricingVideo: video,
+        verified: true,
+        rating: 5,
+        profileImage: profileImagePath,
+        accountBalance: 0,
+        clerkUserId: clerkUserId || undefined // Optionally link to Clerk user
+      };
+
+      const created = await storage.createUser(reader);
+
+      // Stripe Connect onboarding (real production logic)
+      const { onboardingUrl, stripeAccountId } = await triggerStripeConnectOnboarding(created);
+
+      // Fetch updated user w/ Stripe account ID
+      const updated = await storage.getUser(created.id);
+
+      // Log admin action
+      // eslint-disable-next-line no-console
+      console.log(`[AUDIT] Admin ${req.user.id} created reader ${created.id} (${username}) w/ StripeAccount: ${stripeAccountId}`);
+
+      // Return created reader (without password) and onboarding URL
+      const { password, ...safeReader } = updated || created;
+      res.status(201).json({ reader: safeReader, stripeOnboarding: onboardingUrl });
+    } catch (err: any) {
+      // eslint-disable-next-line no-console
+      console.error("[ADMIN READER CREATE ERROR]", err);
+      res.status(500).json({ message: err.message || "Failed to create reader." });
+    }
+  });
+
   // Create HTTP server
   const httpServer = createServer(app);
 
@@ -202,46 +763,460 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json({received: true});
   });
 
-  // Setup WebSocket server for live readings and real-time communication
-  const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
-  
-  // Track all connected WebSocket clients
+  // ---- Custom WebRTC Signaling & Session Management ----
+  const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
+
+  // Client registry
   const connectedClients = new Map();
   let clientIdCounter = 1;
-  
-  // Broadcast a message to all connected clients
+
+  // Active session state for readings and live streams
+  const activeReadingSessions: Record<
+    string,
+    {
+      readingId: number,
+      clientId: number,
+      readerId: number,
+      type: "chat" | "voice" | "video",
+      pricePerMinute: number,
+      startedAt: Date,
+      lastActive: Date,
+      billedMinutes: number,
+      chatTranscript: { senderId: number; message: string; timestamp: number }[],
+      timer: NodeJS.Timeout | null,
+      participants: Set<number>,
+      graceTimeout: NodeJS.Timeout | null,
+      disconnectedAt: Date | null,
+      status: "active" | "grace" | "ended"
+    }
+  > = {};
+
+  // Live Stream Rooms (for video, gifting, chat overlay)
+  const liveStreamRooms: Record<
+    string,
+    {
+      streamId: number,
+      readerId: number,
+      viewers: Set<number>,
+      chatTranscript: { senderId: number; message: string; timestamp: number }[],
+      gifts: { senderId: number, amount: number, giftType: string, timestamp: number }[],
+      startedAt: Date,
+      status: "live" | "ended"
+    }
+  > = {};
+
+  // Broadcast helpers
   const broadcastToAll = (message: any) => {
     const messageStr = typeof message === 'string' ? message : JSON.stringify(message);
-    console.log(`Broadcasting message to all clients: ${messageStr}`);
-    
-    let sentCount = 0;
     wss.clients.forEach((client) => {
       if (client.readyState === WebSocket.OPEN) {
-        try {
-          client.send(messageStr);
-          sentCount++;
-        } catch (error) {
-          console.error("Error sending message to client:", error);
-        }
+        try { client.send(messageStr); } catch {}
       }
     });
-    
-    console.log(`Successfully sent message to ${sentCount} clients`);
   };
-  
-  // Send a notification to a specific user if they're connected
   const notifyUser = (userId: number, notification: any) => {
-    const userClients = Array.from(connectedClients.entries())
-      .filter(([_, data]) => data.userId === userId)
-      .map(([clientId]) => clientId);
-      
-    userClients.forEach(clientId => {
-      const clientSocket = connectedClients.get(clientId)?.socket;
-      if (clientSocket && clientSocket.readyState === WebSocket.OPEN) {
-        clientSocket.send(JSON.stringify(notification));
+    for (const [clientId, data] of connectedClients.entries()) {
+      if (data.userId === userId && data.socket.readyState === WebSocket.OPEN) {
+        data.socket.send(JSON.stringify(notification));
+      }
+    }
+  };
+
+  // ---- WebSocket event dispatcher ----
+  wss.on("connection", (ws, req) => {
+    const clientId = clientIdCounter++;
+    let userId: number | null = null;
+    connectedClients.set(clientId, { socket: ws, userId });
+
+    ws.on("message", async (raw) => {
+      let data: any;
+      try { data = JSON.parse(raw.toString()); } catch { return; }
+
+      // 1. Authentication handshake
+      if (data.type === "authenticate" && data.userId) {
+        userId = data.userId;
+        connectedClients.set(clientId, { socket: ws, userId });
+        ws.send(JSON.stringify({ type: "authentication_success", userId }));
+        return;
+      }
+
+      // 2. Reading session join/init (see previous code for full logic)
+      // ... (use previous code for "initiate_reading" etc, as above) ...
+
+      // 3. WebRTC signaling: offer/answer/candidate
+      // ... Forward as above ...
+
+      // 4. Reading chat, session billing/extension, disconnect/reconnect/end
+      // ... As above ...
+
+      // 5. Live Stream: join, chat, gifting
+      if (data.type === "livestream_join") {
+        const { streamId } = data;
+        if (!streamId || !userId) return;
+        if (!liveStreamRooms[streamId]) {
+          // Create stream room if not present
+          const stream = await storage.getLivestream(streamId);
+          if (!stream) return;
+          liveStreamRooms[streamId] = {
+            streamId,
+            readerId: stream.userId,
+            viewers: new Set(),
+            chatTranscript: [],
+            gifts: [],
+            startedAt: new Date(),
+            status: "live"
+          };
+        }
+        liveStreamRooms[streamId].viewers.add(userId);
+        notifyUser(userId, { type: "livestream_joined", streamId });
+        return;
+      }
+      if (data.type === "livestream_chat") {
+        const { streamId, message } = data;
+        if (!streamId || !userId) return;
+        if (!liveStreamRooms[streamId]) return;
+        const chatMsg = { senderId: userId, message, timestamp: Date.now() };
+        liveStreamRooms[streamId].chatTranscript.push(chatMsg);
+        // Broadcast to all viewers
+        for (const v of liveStreamRooms[streamId].viewers) {
+          notifyUser(v, { type: "livestream_chat", ...chatMsg });
+        }
+        return;
+      }
+      if (data.type === "livestream_gift") {
+        const { streamId, amount, giftType } = data;
+        if (!streamId || !userId || !amount || !giftType) return;
+        if (!liveStreamRooms[streamId]) return;
+        const gift = { senderId: userId, amount, giftType, timestamp: Date.now() };
+        liveStreamRooms[streamId].gifts.push(gift);
+        // Update balances in real time
+        const stream = liveStreamRooms[streamId];
+        const reader = await storage.getUser(stream.readerId);
+        if (reader) {
+          await storage.updateUser(reader.id, {
+            accountBalance: (reader.accountBalance ?? 0) + Math.floor(amount * 0.7)
+          });
+        }
+        // Animate for all viewers
+        for (const v of stream.viewers) {
+          notifyUser(v, { type: "livestream_gift", ...gift });
+        }
+        return;
       }
     });
-  };
+
+    ws.on("close", () => { connectedClients.delete(clientId); });
+  });
+
+  // ---- ICE/STUN/TURN config API (auth-secured) ----
+  app.get("/api/webrtc/config/:readingId", async (req, res) => {
+    try {
+      if (!req.isAuthenticated?.()) return res.status(401).json({ message: "Not authenticated" });
+      const readingId = parseInt(req.params.readingId);
+      if (isNaN(readingId)) return res.status(400).json({ message: "Invalid reading ID" });
+      const reading = await storage.getReading(readingId);
+      if (!reading) return res.status(404).json({ message: "Reading not found" });
+      // Only allow session participants
+      if (![reading.clientId, reading.readerId].includes(req.user.id))
+        return res.status(403).json({ message: "Forbidden" });
+      // Return ICE config
+      const { WEBRTC_ICE_SERVERS } = await import("./env.js");
+      res.json({ iceServers: JSON.parse(WEBRTC_ICE_SERVERS) });
+    } catch (err) {
+      res.status(500).json({ message: "Failed to get ICE config" });
+    }
+  });
+
+  // Secure and robust WebRTC signaling/session management
+  wss.on("connection", (ws, req) => {
+    const clientId = clientIdCounter++;
+    let userId: number | null = null;
+
+    connectedClients.set(clientId, { socket: ws, userId });
+
+    ws.on("message", async (raw) => {
+      let data: any;
+      try {
+        data = JSON.parse(raw.toString());
+      } catch (err) {
+        ws.send(JSON.stringify({ type: "error", message: "Malformed message." }));
+        return;
+      }
+
+      if (data.type === "authenticate" && data.userId) {
+        userId = data.userId;
+        connectedClients.set(clientId, { socket: ws, userId });
+        ws.send(JSON.stringify({ type: "authentication_success", userId }));
+        return;
+      }
+
+      // --- WebRTC Session Init/Join ---
+      if (["initiate_reading", "join_reading"].includes(data.type)) {
+        // Validate user and reading
+        if (!userId) return ws.send(JSON.stringify({ type: "error", message: "Must authenticate first." }));
+
+        const readingId = data.readingId;
+        const reading = await storage.getReading(readingId);
+        if (!reading) return ws.send(JSON.stringify({ type: "error", message: "Invalid reading." }));
+
+        // Only allow client or reader to join their own reading
+        if (![reading.clientId, reading.readerId].includes(userId)) {
+          return ws.send(JSON.stringify({ type: "error", message: "Not authorized for this reading." }));
+        }
+
+        // Initialize session if needed
+        if (!activeReadingSessions[readingId]) {
+          activeReadingSessions[readingId] = {
+            readingId,
+            clientId: reading.clientId,
+            readerId: reading.readerId,
+            type: reading.type,
+            pricePerMinute: reading.pricePerMinute,
+            startedAt: new Date(),
+            lastActive: new Date(),
+            billedMinutes: 0,
+            chatTranscript: [],
+            timer: null,
+            participants: new Set(),
+            graceTimeout: null,
+            disconnectedAt: null,
+            status: "active",
+          };
+        }
+
+        // Add participant
+        activeReadingSessions[readingId].participants.add(userId);
+        activeReadingSessions[readingId].lastActive = new Date();
+
+        // If both participants are present, start minute billing
+        if (
+          activeReadingSessions[readingId].participants.has(reading.clientId) &&
+          activeReadingSessions[readingId].participants.has(reading.readerId) &&
+          !activeReadingSessions[readingId].timer
+        ) {
+          // Start minute billing
+          activeReadingSessions[readingId].timer = setInterval(async () => {
+            try {
+              const session = activeReadingSessions[readingId];
+              if (!session || session.status !== "active") return;
+              session.billedMinutes++;
+              // Deduct from client, credit reader (real-time production logic)
+              const client = await storage.getUser(session.clientId);
+              const reader = await storage.getUser(session.readerId);
+              if (!client || !reader) throw new Error("User not found for billing.");
+              if ((client.accountBalance ?? 0) < session.pricePerMinute) {
+                // End session for insufficient balance
+                ws.send(
+                  JSON.stringify({ type: "session_end", reason: "insufficient_balance" })
+                );
+                clearInterval(session.timer!);
+                session.status = "ended";
+                await storage.updateReading(session.readingId, {
+                  status: "completed",
+                  duration: session.billedMinutes,
+                  totalPrice: session.billedMinutes * session.pricePerMinute,
+                  completedAt: new Date(),
+                });
+                return;
+              }
+              await storage.updateUser(client.id, {
+                accountBalance: (client.accountBalance ?? 0) - session.pricePerMinute,
+              });
+              await storage.updateUser(reader.id, {
+                accountBalance: (reader.accountBalance ?? 0) + Math.floor(session.pricePerMinute * 0.7),
+              });
+              // Send minute update to both
+              notifyUser(session.clientId, { type: "minute_billed", minutes: session.billedMinutes });
+              notifyUser(session.readerId, { type: "minute_billed", minutes: session.billedMinutes });
+            } catch (err) {
+              // eslint-disable-next-line no-console
+              console.error("[BILLING ERROR]", err);
+            }
+          }, 60 * 1000);
+        }
+
+        // Notify both users that session is ready
+        notifyUser(reading.clientId, { type: "session_ready", readingId, mode: reading.type });
+        notifyUser(reading.readerId, { type: "session_ready", readingId, mode: reading.type });
+        return;
+      }
+
+      // --- WebRTC Signal Events (offer/answer/ice) ---
+      if (["signal_offer", "signal_answer", "signal_ice"].includes(data.type)) {
+        // Validate session and forward to the other participant
+        const { readingId, recipientId, payload } = data;
+        if (!readingId || !recipientId) return;
+        if (
+          !activeReadingSessions[readingId] ||
+          !activeReadingSessions[readingId].participants.has(userId)
+        )
+          return;
+        notifyUser(recipientId, {
+          type: data.type,
+          readingId,
+          senderId: userId,
+          payload,
+        });
+        return;
+      }
+
+      // --- Chat messages within session ---
+      if (data.type === "reading_chat_message") {
+        const { readingId, message } = data;
+        if (
+          !activeReadingSessions[readingId] ||
+          !activeReadingSessions[readingId].participants.has(userId)
+        )
+          return;
+        const chatMsg = {
+          senderId: userId,
+          message,
+          timestamp: Date.now(),
+        };
+        activeReadingSessions[readingId].chatTranscript.push(chatMsg);
+        // Forward to both participants
+        notifyUser(activeReadingSessions[readingId].clientId, {
+          type: "reading_chat_message",
+          ...chatMsg,
+        });
+        notifyUser(activeReadingSessions[readingId].readerId, {
+          type: "reading_chat_message",
+          ...chatMsg,
+        });
+        return;
+      }
+
+      // --- Session extension ---
+      if (data.type === "session_extend") {
+        const { readingId, extraMinutes } = data;
+        // In this MVP, extension just notifies both and logs
+        if (
+          !activeReadingSessions[readingId] ||
+          !activeReadingSessions[readingId].participants.has(userId)
+        )
+          return;
+        notifyUser(activeReadingSessions[readingId].clientId, {
+          type: "session_extend",
+          extraMinutes,
+        });
+        notifyUser(activeReadingSessions[readingId].readerId, {
+          type: "session_extend",
+          extraMinutes,
+        });
+        // Optionally: update backend logic for billing/authorization
+        return;
+      }
+
+      // --- Session disconnect (start grace) ---
+      if (data.type === "session_disconnect") {
+        const { readingId } = data;
+        if (
+          !activeReadingSessions[readingId] ||
+          !activeReadingSessions[readingId].participants.has(userId)
+        )
+          return;
+        activeReadingSessions[readingId].participants.delete(userId);
+        activeReadingSessions[readingId].disconnectedAt = new Date();
+        activeReadingSessions[readingId].status = "grace";
+        // Start grace timer for up to 2 minutes
+        if (!activeReadingSessions[readingId].graceTimeout) {
+          activeReadingSessions[readingId].graceTimeout = setTimeout(async () => {
+            // End session if not rejoined
+            if (activeReadingSessions[readingId].participants.size < 2) {
+              clearInterval(activeReadingSessions[readingId].timer!);
+              activeReadingSessions[readingId].status = "ended";
+              await storage.updateReading(readingId, {
+                status: "completed",
+                duration: activeReadingSessions[readingId].billedMinutes,
+                totalPrice:
+                  activeReadingSessions[readingId].billedMinutes *
+                  activeReadingSessions[readingId].pricePerMinute,
+                completedAt: new Date(),
+              });
+              // Notify both (if still connected)
+              notifyUser(activeReadingSessions[readingId].clientId, {
+                type: "session_end",
+                reason: "disconnected_timeout",
+              });
+              notifyUser(activeReadingSessions[readingId].readerId, {
+                type: "session_end",
+                reason: "disconnected_timeout",
+              });
+              // Persist transcript
+              await storage.updateReading(readingId, {
+                notes: JSON.stringify(activeReadingSessions[readingId].chatTranscript),
+              });
+              delete activeReadingSessions[readingId];
+            }
+          }, 2 * 60 * 1000); // 2 min grace
+        }
+        return;
+      }
+
+      // --- Session reconnect (clear grace) ---
+      if (data.type === "session_reconnect") {
+        const { readingId } = data;
+        if (
+          !activeReadingSessions[readingId]
+        )
+          return;
+        activeReadingSessions[readingId].participants.add(userId);
+        if (
+          activeReadingSessions[readingId].participants.size === 2 &&
+          activeReadingSessions[readingId].graceTimeout
+        ) {
+          clearTimeout(activeReadingSessions[readingId].graceTimeout!);
+          activeReadingSessions[readingId].graceTimeout = null;
+          activeReadingSessions[readingId].status = "active";
+          notifyUser(activeReadingSessions[readingId].clientId, {
+            type: "session_resumed",
+          });
+          notifyUser(activeReadingSessions[readingId].readerId, {
+            type: "session_resumed",
+          });
+        }
+        return;
+      }
+
+      // --- Session end (normal or forced) ---
+      if (data.type === "session_end") {
+        const { readingId, summary } = data;
+        if (
+          !activeReadingSessions[readingId]
+        )
+          return;
+        clearInterval(activeReadingSessions[readingId].timer!);
+        activeReadingSessions[readingId].status = "ended";
+        // Save summary and transcript
+        await storage.updateReading(readingId, {
+          status: "completed",
+          duration: activeReadingSessions[readingId].billedMinutes,
+          totalPrice:
+            activeReadingSessions[readingId].billedMinutes *
+            activeReadingSessions[readingId].pricePerMinute,
+          completedAt: new Date(),
+          notes: JSON.stringify({
+            summary: summary || "",
+            chatTranscript: activeReadingSessions[readingId].chatTranscript,
+          }),
+        });
+        notifyUser(activeReadingSessions[readingId].clientId, {
+          type: "session_end",
+          reason: "normal",
+        });
+        notifyUser(activeReadingSessions[readingId].readerId, {
+          type: "session_end",
+          reason: "normal",
+        });
+        delete activeReadingSessions[readingId];
+        return;
+      }
+    });
+
+    ws.on("close", () => {
+      connectedClients.delete(clientId);
+    });
+  });
   
   // Make WebSocket methods available globally
   (global as any).websocket = {
@@ -2022,6 +2997,89 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       res.status(500).json({ message: "Failed to create comment" });
     }
+  });
+
+  // --- MESSAGING (DM) ENDPOINTS ---
+  // --- DM RATE LIMITERS ---
+const dmSendLimiter = require("express-rate-limit")({ windowMs: 5 * 60 * 1000, max: 20, standardHeaders: true, legacyHeaders: false });
+const dmReadLimiter = require("express-rate-limit")({ windowMs: 2 * 60 * 1000, max: 60 });
+
+  app.get("/api/messages/conversations", dmReadLimiter, async (req, res) => {
+    if (!req.isAuthenticated?.()) return res.status(401).json({ message: "Sign in required" });
+    const convs = await storage.listConversations(req.user.id);
+    // Attach user info
+    const users = await storage.getAllUsers();
+    res.json(convs.map(c => ({
+      ...c,
+      user: users.find(u => u.id === c.userId)
+        ? { id: c.userId, fullName: users.find(u => u.id === c.userId)!.fullName, profileImage: users.find(u => u.id === c.userId)!.profileImage }
+        : { id: c.userId, fullName: "Unknown" },
+      last: c.last,
+      unread: c.unread,
+    })));
+  });
+
+  app.get("/api/messages/:userId", dmReadLimiter, async (req, res) => {
+    if (!req.isAuthenticated?.()) return res.status(401).json({ message: "Sign in required" });
+    const paramSchema = z.object({ userId: z.string().regex(/^[0-9]+$/) });
+    const qSchema = z.object({ before: z.string().optional() });
+    const paramRes = paramSchema.safeParse(req.params);
+    if (!paramRes.success) return res.status(400).json({ message: "Invalid userId" });
+    const otherId = Number(paramRes.data.userId);
+    const qRes = qSchema.safeParse(req.query);
+    const before = qRes.success && qRes.data.before ? new Date(qRes.data.before) : undefined;
+    const msgs = await storage.listMessagesBetween(req.user.id, otherId, before, 50);
+    res.json(msgs.reverse());
+  });
+
+  app.post("/api/messages/:userId", dmSendLimiter, async (req, res) => {
+    if (!req.isAuthenticated?.()) return res.status(401).json({ message: "Sign in required" });
+    const paramSchema = z.object({ userId: z.string().regex(/^[0-9]+$/) });
+    const bodySchema = z.object({ content: z.string().min(1).max(2000) });
+    const paramRes = paramSchema.safeParse(req.params);
+    const bodyRes = bodySchema.safeParse(req.body);
+    if (!paramRes.success) return res.status(400).json({ message: "Invalid userId" });
+    if (!bodyRes.success) return res.status(400).json({ message: "Invalid content", errors: bodyRes.error.errors });
+    const otherId = Number(paramRes.data.userId);
+    const msg = await storage.createMessage({
+      senderId: req.user.id,
+      receiverId: otherId,
+      content: bodyRes.data.content,
+      createdAt: new Date(),
+      read: false,
+    });
+    // WS notify recipient
+    if ((global as any).websocket?.notifyUser) {
+      (global as any).websocket.notifyUser(otherId, {
+        type: "new_dm",
+        message: msg,
+      });
+    }
+    // Push notify recipient (if enabled)
+    import { sendPush } from "./lib/push.js";
+    sendPush(
+      otherId,
+      "New message",
+      bodyRes.data.content.slice(0, 60),
+      { type: "dm", from: String(req.user.id) }
+    );
+    res.json(msg);
+  });
+
+  app.post("/api/messages/:id/read", dmSendLimiter, async (req, res) => {
+    if (!req.isAuthenticated?.()) return res.status(401).json({ message: "Sign in required" });
+    const paramSchema = z.object({ id: z.string().regex(/^[0-9]+$/) });
+    const paramRes = paramSchema.safeParse(req.params);
+    if (!paramRes.success) return res.status(400).json({ message: "Invalid message id" });
+    const id = Number(paramRes.data.id);
+    const msg = await storage.markMessageAsRead(id);
+    res.json(msg);
+  });
+
+  app.get("/api/messages/unread-count", dmReadLimiter, async (req, res) => {
+    if (!req.isAuthenticated?.()) return res.status(401).json({ message: "Sign in required" });
+    const count = await storage.getUnreadMessageCount(req.user.id);
+    res.json({ count });
   });
   
   // Messages

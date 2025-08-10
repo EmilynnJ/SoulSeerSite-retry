@@ -26,6 +26,8 @@ export const users = pgTable("users", {
   // No longer using Square - only Stripe
   // stripeCustomerId field already exists
   stripeCustomerId: text("stripe_customer_id"), // Stripe customer ID for payment processing
+  stripeAccountId: text("stripe_account_id").unique(), // Stripe Connect account ID (for payouts to readers, unique)
+  clerkUserId: text("clerk_user_id").unique(), // Clerk user ID (optional, unique)
 });
 
 export const messages = pgTable("messages", {
@@ -33,10 +35,11 @@ export const messages = pgTable("messages", {
   senderId: integer("sender_id").notNull().references(() => users.id),
   receiverId: integer("receiver_id").notNull().references(() => users.id),
   content: text("content").notNull(),
-  isPaid: boolean("is_paid").default(false),
-  price: integer("price"),
-  readAt: timestamp("read_at"),
   createdAt: timestamp("created_at").defaultNow(),
+  read: boolean("read").default(false),
+  readAt: timestamp("read_at"),
+  price: integer("price"),
+  isPaid: boolean("is_paid"),
 });
 
 export const readings = pgTable("readings", {
@@ -136,6 +139,53 @@ export const forumComments = pgTable("forum_comments", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+// Livestreams (Mux-based)
+export const livestreamStatusEnum = ["scheduled", "live", "ended"] as const;
+export const livestreams = pgTable("livestreams", {
+  id: serial("id").primaryKey(),
+  readerId: integer("reader_id").notNull().references(() => users.id),
+  muxStreamKey: text("mux_stream_key").notNull().unique(),
+  muxPlaybackId: text("mux_playback_id").notNull().unique(),
+  status: text("status", { enum: livestreamStatusEnum }).notNull().default("scheduled"),
+  viewerCount: integer("viewer_count").default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+  endedAt: timestamp("ended_at"),
+  // SCHEDULING
+  title: text("title"),
+  description: text("description"),
+  scheduledFor: timestamp("scheduled_for"),
+  reminderSent: boolean("reminder_sent").default(false),
+});
+
+export const livestreamSubscriptions = pgTable("livestream_subscriptions", {
+  id: serial("id").primaryKey(),
+  livestreamId: integer("livestream_id").notNull().references(() => livestreams.id, { onDelete: "cascade" }),
+  userId: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at").defaultNow(),
+  reminderSentAt: timestamp("reminder_sent_at"),
+});
+export type LivestreamSubscription = typeof livestreamSubscriptions.$inferSelect;
+export type InsertLivestreamSubscription = typeof livestreamSubscriptions.$inferInsert;
+
+// Content flags
+export const contentFlags = pgTable("content_flags", {
+  id: serial("id").primaryKey(),
+  type: text("type", { enum: ["post", "comment", "message", "livestream"] }).notNull(),
+  targetId: integer("target_id").notNull(),
+  reporterId: integer("reporter_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  reason: text("reason"),
+  status: text("status", { enum: ["open", "reviewed", "dismissed"] }).notNull().default("open"),
+  createdAt: timestamp("created_at").defaultNow(),
+  reviewedBy: integer("reviewed_by").references(() => users.id),
+  reviewedAt: timestamp("reviewed_at"),
+  notes: text("notes"),
+});
+export type ContentFlag = typeof contentFlags.$inferSelect;
+export type InsertContentFlag = typeof contentFlags.$inferInsert;
+
+export type Livestream = typeof livestreams.$inferSelect;
+export type InsertLivestream = typeof livestreams.$inferInsert;
+
 export const gifts = pgTable("gifts", {
   id: serial("id").primaryKey(),
   senderId: integer("sender_id").notNull().references(() => users.id),
@@ -157,7 +207,12 @@ export const gifts = pgTable("gifts", {
 // Insert Schemas
 
 export const insertUserSchema = createInsertSchema(users)
-  .omit({ id: true, createdAt: true, lastActive: true, isOnline: true, reviewCount: true });
+  .omit({ id: true, createdAt: true, lastActive: true, isOnline: true, reviewCount: true })
+  .extend({
+    password: z.string().optional(), // Make password optional for Clerk-imported users
+    clerkUserId: z.string().optional(),
+    stripeAccountId: z.string().optional()
+  });
 
 export const insertReadingSchema = createInsertSchema(readings)
   .omit({ 
@@ -216,6 +271,21 @@ export const insertMessageSchema = createInsertSchema(messages)
 export const insertGiftSchema = createInsertSchema(gifts)
   .omit({ id: true, createdAt: true, processed: true, processedAt: true });
   
+// Payouts Table
+import { pgEnum } from "drizzle-orm/pg-core";
+
+export const payoutStatusEnum = pgEnum("payout_status", ["pending", "paid", "failed"]);
+export const payouts = pgTable("payouts", {
+  id: serial("id").primaryKey(),
+  readerId: integer("reader_id").notNull().references(() => users.id),
+  amountCents: integer("amount_cents").notNull(),
+  status: text("status", { enum: ["pending", "paid", "failed"] }).notNull(),
+  stripeTransferId: text("stripe_transfer_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+  paidAt: timestamp("paid_at"),
+  failureReason: text("failure_reason"),
+});
+
 // Types
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
@@ -223,9 +293,14 @@ export type UserUpdate = Partial<InsertUser> & {
   isOnline?: boolean;
   lastActive?: Date;
   stripeCustomerId?: string;
+  stripeAccountId?: string;
   accountBalance?: number;
   reviewCount?: number;
+  clerkUserId?: string;
 };
+
+export type Payout = typeof payouts.$inferSelect;
+export type InsertPayout = typeof payouts.$inferInsert;
 
 export type InsertReading = z.infer<typeof insertReadingSchema>;
 export type Reading = typeof readings.$inferSelect;
@@ -253,3 +328,14 @@ export type Message = typeof messages.$inferSelect;
 
 export type InsertGift = z.infer<typeof insertGiftSchema>;
 export type Gift = typeof gifts.$inferSelect;
+
+// Push tokens
+export const pushTokens = pgTable("push_tokens", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull().references(() => users.id),
+  token: text("token").notNull().unique(),
+  platform: text("platform"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+export type PushToken = typeof pushTokens.$inferSelect;
+export type InsertPushToken = typeof pushTokens.$inferInsert;
